@@ -217,26 +217,26 @@ Greenfield feature — no data migration. Removing `/weatherforecast` is intenti
 
 #### Automated
 
-- [x] 1.1 Solution builds: `dotnet build`
-- [x] 1.2 API smoke / mapping test passes when present (`dotnet test`), or deferred explicitly to Phase 3
-- [x] 1.3 `dotnet test` passes if a test project exists after this phase
+- [x] 1.1 Solution builds: `dotnet build` — ace458a
+- [x] 1.2 API smoke / mapping test passes when present (`dotnet test`), or deferred explicitly to Phase 3 — ace458a
+- [x] 1.3 `dotnet test` passes if a test project exists after this phase — ace458a
 
 #### Manual
 
-- [x] 1.4 `GET /api/data/bybit?symbol=BTCUSDT&interval=1h&limit=50` returns non-empty OHLCV JSON while online
-- [x] 1.5 Weatherforecast is no longer the primary demo surface
+- [x] 1.4 `GET /api/data/bybit?symbol=BTCUSDT&interval=1h&limit=50` returns non-empty OHLCV JSON while online — ace458a
+- [x] 1.5 Weatherforecast is no longer the primary demo surface — ace458a
 
 ### Phase 2: Frontend shell + load controls
 
 #### Automated
 
-- [ ] 2.1 `npm install` + `npm run build` succeed in `frontend/`
-- [ ] 2.2 Typecheck passes when configured
+- [x] 2.1 `npm install` + `npm run build` succeed in `frontend/`
+- [x] 2.2 Typecheck passes when configured
 
 #### Manual
 
-- [ ] 2.3 Successful Load shows candle confirmation (count or data) with API running
-- [ ] 2.4 Failed Load shows error and retains prior successful series
+- [x] 2.3 Successful Load shows candle confirmation (count or data) with API running
+- [x] 2.4 Failed Load shows error and retains prior successful series
 
 ### Phase 3: Chart + verification
 

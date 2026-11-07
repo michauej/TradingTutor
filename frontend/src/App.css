@@ -1,0 +1,106 @@
+.dashboard {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+.dashboard-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.dashboard-header p {
+  margin: 0 0 1.5rem;
+  color: var(--text-muted);
+}
+
+.load-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+}
+
+.load-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.load-form input,
+.load-form select {
+  min-width: 10rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+}
+
+.load-form input:focus,
+.load-form select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.load-form button {
+  padding: 0.55rem 1.1rem;
+  border: none;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.load-form button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.load-form button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+.status-error {
+  color: var(--error);
+}
+
+.status-info {
+  color: var(--text-muted);
+}
+
+.candle-preview {
+  margin-top: 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-elevated);
+}
+
+.candle-preview h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.candle-preview p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  word-break: break-word;
+}
