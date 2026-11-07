@@ -1,7 +1,7 @@
 ---
 change_id: load-candles-chart
 title: Load historical candles onto the sim chart
-status: implementing
+status: impl_reviewed
 created: 2026-11-07
 updated: 2026-11-07
 archived_at: null

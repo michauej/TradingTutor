@@ -31,9 +31,19 @@ With API and `frontend/` running locally, the learner sets symbol + interval (de
 - SQL / EF persistence
 - ByBit API keys / user-secrets for market data
 - Checked-in sample candle fallback when ByBit is down
-- Moving API under `backend/` or multi-project solution split
 - Strategy / backtest UI from CryptoTools
 - Auth
+
+## Addendum: accepted backend layout (post Phase 1)
+
+The original guardrail against relocating the API under `backend/` / a multi-project split is **superseded**. Canonical layout going forward:
+
+- `backend/TradingTutor.API` — host (`Program.cs`, controllers, CORS, OpenAPI)
+- `backend/TradingTutor.Core` — shared domain models (e.g. `MarketData`)
+- `backend/TradingTutor.Trading` — exchange clients (`IExchangeService`, ByBit)
+- Root `TradingTutor.slnx` — only supported solution entrypoint (`backend/` + `tests/`; no nested `backend/*.slnx`)
+
+Phase 1 file paths that named repo-root `Models/` / `Services/` / `Program.cs` map to the projects above. Behavior contracts (route, payload, CORS) are unchanged.
 
 ## Implementation Approach
 
@@ -230,23 +240,23 @@ Greenfield feature — no data migration. Removing `/weatherforecast` is intenti
 
 #### Automated
 
-- [x] 2.1 `npm install` + `npm run build` succeed in `frontend/`
-- [x] 2.2 Typecheck passes when configured
+- [x] 2.1 `npm install` + `npm run build` succeed in `frontend/` — f2e016a
+- [x] 2.2 Typecheck passes when configured — f2e016a
 
 #### Manual
 
-- [x] 2.3 Successful Load shows candle confirmation (count or data) with API running
-- [x] 2.4 Failed Load shows error and retains prior successful series
+- [x] 2.3 Successful Load shows candle confirmation (count or data) with API running — f2e016a (manual E2E confirmed)
+- [x] 2.4 Failed Load shows error and retains prior successful series — f2e016a (manual E2E confirmed)
 
 ### Phase 3: Chart + verification
 
 #### Automated
 
-- [x] 3.1 `dotnet build` and `dotnet test` pass
-- [x] 3.2 `npm run build` in `frontend/` passes
+- [x] 3.1 `dotnet build` and `dotnet test` pass — 0bd2a44
+- [x] 3.2 `npm run build` in `frontend/` passes — 0bd2a44
 
 #### Manual
 
-- [ ] 3.3 E2E: Load BTCUSDT 1h → candlesticks visible
-- [ ] 3.4 Reload with different symbol/interval → chart updates
-- [ ] 3.5 Failure path: error shown; previous candlesticks retained
+- [x] 3.3 E2E: Load BTCUSDT 1h → candlesticks visible — 0bd2a44 (manual E2E confirmed)
+- [x] 3.4 Reload with different symbol/interval → chart updates — 0bd2a44 (manual E2E confirmed)
+- [x] 3.5 Failure path: error shown; previous candlesticks retained — 0bd2a44 (manual E2E confirmed)

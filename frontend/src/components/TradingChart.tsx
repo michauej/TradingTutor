@@ -74,16 +74,26 @@ export default function TradingChart({ candles }: TradingChartProps) {
       return
     }
 
-    const data = candles.map((candle) => ({
-      time: toUtcTimestamp(candle.timestamp),
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }))
+    const data = []
+    for (const candle of candles) {
+      const time = tryUtcTimestamp(candle.timestamp)
+      if (time === null) {
+        console.warn('Skipping candle with invalid timestamp:', candle.timestamp)
+        continue
+      }
+      data.push({
+        time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      })
+    }
 
     series.setData(data)
-    chart.timeScale().fitContent()
+    if (data.length > 0) {
+      chart.timeScale().fitContent()
+    }
   }, [candles])
 
   return (
@@ -101,10 +111,10 @@ export default function TradingChart({ candles }: TradingChartProps) {
   )
 }
 
-function toUtcTimestamp(value: string): UTCTimestamp {
+function tryUtcTimestamp(value: string): UTCTimestamp | null {
   const ms = Date.parse(value)
   if (Number.isNaN(ms)) {
-    throw new Error(`Invalid candle timestamp: ${value}`)
+    return null
   }
   return Math.floor(ms / 1000) as UTCTimestamp
 }

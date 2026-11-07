@@ -87,18 +87,25 @@ public class ByBitService : IExchangeService
                 continue;
             }
 
-            candles.Add(new MarketData
+            try
             {
-                Symbol = symbol.ToUpperInvariant(),
-                Exchange = ExchangeName,
-                Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(ParseInt64(row[0])).UtcDateTime,
-                Open = ParseDecimal(row[1]),
-                High = ParseDecimal(row[2]),
-                Low = ParseDecimal(row[3]),
-                Close = ParseDecimal(row[4]),
-                Volume = ParseDecimal(row[5]),
-                Interval = interval
-            });
+                candles.Add(new MarketData
+                {
+                    Symbol = symbol.ToUpperInvariant(),
+                    Exchange = ExchangeName,
+                    Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(ParseInt64(row[0])).UtcDateTime,
+                    Open = ParseDecimal(row[1]),
+                    High = ParseDecimal(row[2]),
+                    Low = ParseDecimal(row[3]),
+                    Close = ParseDecimal(row[4]),
+                    Volume = ParseDecimal(row[5]),
+                    Interval = interval
+                });
+            }
+            catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Skipping malformed ByBit kline row for {Symbol} {Interval}", symbol, interval);
+            }
         }
 
         // ByBit returns newest-first; chart consumers expect oldest-first.

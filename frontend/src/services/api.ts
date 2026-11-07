@@ -14,6 +14,7 @@ export interface FetchByBitCandlesParams {
   symbol: string
   interval: string
   limit?: number
+  signal?: AbortSignal
 }
 
 export class ApiError extends Error {
@@ -35,7 +36,9 @@ export async function fetchByBitCandles(
     limit: String(params.limit ?? 200),
   })
 
-  const response = await fetch(`/api/data/bybit?${query.toString()}`)
+  const response = await fetch(`/api/data/bybit?${query.toString()}`, {
+    signal: params.signal,
+  })
 
   if (!response.ok) {
     let detail = `Request failed (${response.status})`

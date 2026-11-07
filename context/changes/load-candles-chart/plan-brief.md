@@ -31,7 +31,9 @@ Learner opens the local UI, sets symbol/interval (defaults BTCUSDT / 1h), loads 
 
 **In scope:** ByBit candle endpoint, CORS, React load UI, candlestick chart, smoke test, remove weatherforecast as primary demo.
 
-**Out of scope:** File import, playback, trading, diary/AI, multi-symbol, EF/SQL, API keys, sample JSON fallback, `backend/` relocation.
+**Out of scope:** File import, playback, trading, diary/AI, multi-symbol, EF/SQL, API keys, sample JSON fallback.
+
+**Layout note:** `backend/{API,Core,Trading}` multi-project split is accepted (see plan addendum); not a revert target.
 
 ## Architecture / Approach
 

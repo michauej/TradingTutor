@@ -8,10 +8,12 @@ namespace TradingTutor.API.Controllers;
 public class DataController : ControllerBase
 {
     private readonly IExchangeService _exchangeService;
+    private readonly ILogger<DataController> _logger;
 
-    public DataController(IExchangeService exchangeService)
+    public DataController(IExchangeService exchangeService, ILogger<DataController> logger)
     {
         _exchangeService = exchangeService;
+        _logger = logger;
     }
 
     [HttpGet("bybit")]
@@ -35,10 +37,22 @@ public class DataController : ControllerBase
 
             return Ok(candles);
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
             return Problem(
                 detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid request");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch ByBit candles for {Symbol} {Interval}", symbol, interval);
+            return Problem(
+                detail: "Failed to fetch market data from ByBit.",
                 statusCode: StatusCodes.Status502BadGateway,
                 title: "Failed to fetch ByBit candles");
         }

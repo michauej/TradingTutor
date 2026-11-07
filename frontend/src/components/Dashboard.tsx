@@ -1,8 +1,15 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, fetchByBitCandles, type MarketData } from '../services/api'
 import TradingChart from './TradingChart'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === 'AbortError') ||
+    (err instanceof Error && err.name === 'AbortError')
+  )
+}
 
 export default function Dashboard() {
   const [symbol, setSymbol] = useState('BTCUSDT')
@@ -10,9 +17,20 @@ export default function Dashboard() {
   const [candles, setCandles] = useState<MarketData[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const loadAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      loadAbortRef.current?.abort()
+    }
+  }, [])
 
   async function handleLoad(event: FormEvent) {
     event.preventDefault()
+    loadAbortRef.current?.abort()
+    const controller = new AbortController()
+    loadAbortRef.current = controller
+
     setLoading(true)
     setError(null)
 
@@ -20,9 +38,13 @@ export default function Dashboard() {
       const data = await fetchByBitCandles({
         symbol: symbol.trim().toUpperCase(),
         interval,
+        signal: controller.signal,
       })
       setCandles(data)
     } catch (err) {
+      if (isAbortError(err)) {
+        return
+      }
       const message =
         err instanceof ApiError
           ? err.message
@@ -32,7 +54,9 @@ export default function Dashboard() {
       setError(message)
       // Keep previous candles on failure (non-destructive).
     } finally {
-      setLoading(false)
+      if (loadAbortRef.current === controller) {
+        setLoading(false)
+      }
     }
   }
 

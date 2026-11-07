@@ -66,6 +66,43 @@ public class ByBitServiceTests
         Assert.Equal(102m, second.Close);
     }
 
+    [Fact]
+    public async Task GetMarketDataAsync_SkipsMalformedKlineRow_AndKeepsValidCandles()
+    {
+        const string payload = """
+            {
+              "retCode": 0,
+              "retMsg": "OK",
+              "result": {
+                "symbol": "BTCUSDT",
+                "list": [
+                  ["1700003600000","101","103","100","102","12.5","0"],
+                  ["not-a-timestamp","95","100","94","99","10.5","0"],
+                  ["1700000000000","95","100","94","99","10.5","0"]
+                ]
+              }
+            }
+            """;
+
+        var handler = new StubHttpMessageHandler((_, _) =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            });
+
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.bybit.com")
+        };
+        var service = new ByBitService(httpClient, NullLogger<ByBitService>.Instance);
+
+        var candles = await service.GetMarketDataAsync("BTCUSDT", "1h", limit: 3);
+
+        Assert.Equal(2, candles.Count);
+        Assert.Equal(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc), candles[0].Timestamp);
+        Assert.Equal(new DateTime(2023, 11, 14, 23, 13, 20, DateTimeKind.Utc), candles[1].Timestamp);
+    }
+
     [Theory]
     [InlineData("1m", "1")]
     [InlineData("1h", "60")]
