@@ -1,6 +1,10 @@
 <Solution>
+  <Folder Name="/backend/">
+    <Project Path="backend/TradingTutor.API/TradingTutor.API.csproj" />
+    <Project Path="backend/TradingTutor.Core/TradingTutor.Core.csproj" />
+    <Project Path="backend/TradingTutor.Trading/TradingTutor.Trading.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TradingTutor.Tests/TradingTutor.Tests.csproj" />
   </Folder>
-  <Project Path="trading-tutor.csproj" />
 </Solution>

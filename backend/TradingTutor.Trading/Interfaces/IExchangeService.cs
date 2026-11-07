@@ -1,6 +1,6 @@
-using TradingTutor.Models;
+using TradingTutor.Core.Models;
 
-namespace TradingTutor.Services;
+namespace TradingTutor.Trading.Interfaces;
 
 public interface IExchangeService
 {

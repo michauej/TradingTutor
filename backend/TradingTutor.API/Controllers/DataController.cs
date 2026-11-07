@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using TradingTutor.Services;
+using TradingTutor.Trading.Interfaces;
 
-namespace TradingTutor.Controllers;
+namespace TradingTutor.API.Controllers;
 
 [ApiController]
 [Route("api/data")]

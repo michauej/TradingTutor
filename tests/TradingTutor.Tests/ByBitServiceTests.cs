@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
-using TradingTutor.Services;
+using TradingTutor.Trading.Services;
 using Xunit;
 
 namespace TradingTutor.Tests;

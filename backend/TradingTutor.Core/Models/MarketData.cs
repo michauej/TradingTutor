@@ -1,4 +1,4 @@
-namespace TradingTutor.Models;
+namespace TradingTutor.Core.Models;
 
 public class MarketData
 {

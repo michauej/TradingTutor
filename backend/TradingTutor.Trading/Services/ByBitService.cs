@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
-using TradingTutor.Models;
+using Microsoft.Extensions.Logging;
+using TradingTutor.Core.Models;
+using TradingTutor.Trading.Interfaces;
 
-namespace TradingTutor.Services;
+namespace TradingTutor.Trading.Services;
 
 public class ByBitService : IExchangeService
 {

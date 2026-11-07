@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="TradingTutor.API/TradingTutor.API.csproj" />
+  <Project Path="TradingTutor.Core/TradingTutor.Core.csproj" />
+  <Project Path="TradingTutor.Trading/TradingTutor.Trading.csproj" />
+</Solution>

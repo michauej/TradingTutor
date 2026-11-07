@@ -1,4 +1,5 @@
-using TradingTutor.Services;
+using TradingTutor.Trading.Interfaces;
+using TradingTutor.Trading.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
