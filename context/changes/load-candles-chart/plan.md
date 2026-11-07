@@ -224,7 +224,7 @@ Greenfield feature — no data migration. Removing `/weatherforecast` is intenti
 #### Manual
 
 - [x] 1.4 `GET /api/data/bybit?symbol=BTCUSDT&interval=1h&limit=50` returns non-empty OHLCV JSON while online
-- [ ] 1.5 Weatherforecast is no longer the primary demo surface
+- [x] 1.5 Weatherforecast is no longer the primary demo surface
 
 ### Phase 2: Frontend shell + load controls
 
