@@ -1,5 +1,5 @@
 .dashboard {
-  max-width: 48rem;
+  max-width: 64rem;
   margin: 0 auto;
   padding: 2rem 1.25rem 3rem;
 }
@@ -84,23 +84,28 @@
   color: var(--text-muted);
 }
 
-.candle-preview {
+.chart-panel {
   margin-top: 1.25rem;
-  padding: 1rem 1.1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--bg-elevated);
 }
 
-.candle-preview h2 {
-  margin: 0 0 0.5rem;
+.chart-panel h2 {
+  margin: 0 0 0.65rem;
   font-size: 1rem;
   color: var(--text);
 }
 
-.candle-preview p {
-  margin: 0;
-  font-size: 0.85rem;
+.chart-placeholder {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
   color: var(--text-muted);
-  word-break: break-word;
+}
+
+.chart-container {
+  width: 100%;
+  height: min(28rem, 70vh);
+  min-height: 18rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-elevated);
+  overflow: hidden;
 }

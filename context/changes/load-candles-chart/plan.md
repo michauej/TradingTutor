@@ -242,8 +242,8 @@ Greenfield feature — no data migration. Removing `/weatherforecast` is intenti
 
 #### Automated
 
-- [ ] 3.1 `dotnet build` and `dotnet test` pass
-- [ ] 3.2 `npm run build` in `frontend/` passes
+- [x] 3.1 `dotnet build` and `dotnet test` pass
+- [x] 3.2 `npm run build` in `frontend/` passes
 
 #### Manual
 

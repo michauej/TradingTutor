@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { ApiError, fetchByBitCandles, type MarketData } from '../services/api'
+import TradingChart from './TradingChart'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
 
@@ -86,19 +87,7 @@ export default function Dashboard() {
           : `Loaded ${candles.length} candles (${candles[0]?.symbol} ${candles[0]?.interval}).`}
       </p>
 
-      {candles.length > 0 ? (
-        <div className="candle-preview">
-          <h2>Series preview</h2>
-          <p>
-            First: {formatCandle(candles[0])} · Last:{' '}
-            {formatCandle(candles[candles.length - 1])}
-          </p>
-        </div>
-      ) : null}
+      <TradingChart candles={candles} />
     </div>
   )
-}
-
-function formatCandle(candle: MarketData): string {
-  return `${candle.timestamp} O:${candle.open} H:${candle.high} L:${candle.low} C:${candle.close}`
 }
