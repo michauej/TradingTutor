@@ -1,6 +1,6 @@
 @TradingTutor_HostAddress = http://localhost:5014
 
-GET {{TradingTutor_HostAddress}}/weatherforecast/
+GET {{TradingTutor_HostAddress}}/api/data/bybit?symbol=BTCUSDT&interval=1h&limit=50
 Accept: application/json
 
 ###
