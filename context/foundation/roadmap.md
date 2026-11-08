@@ -3,7 +3,7 @@ project: TradingTutor
 version: 1
 status: draft
 created: 2026-11-07
-updated: 2026-11-07
+updated: 2026-11-08
 prd_version: 1
 main_goal: speed
 top_blocker: skills
@@ -28,8 +28,8 @@ Practicing traders get no coaching signal on what to improve, so bad habits repe
 
 | ID | Change ID | Outcome (user can …) | Prerequisites | PRD refs | Status |
 |---|---|---|---|---|---|
-| S-01 | load-candles-chart | load historical candles and see them on the sim chart | — | FR-001 | in-progress |
-| S-02 | playback-controls | Play / Pause session playback and change speed | S-01 | FR-002, FR-003 | proposed |
+| S-01 | load-candles-chart | load historical candles and see them on the sim chart | — | FR-001 | done |
+| S-02 | playback-controls | Play / Pause session playback and change speed | S-01 | FR-002, FR-003 | in-progress |
 | S-03 | sim-open-close-positions | open Long/Short, close position, see configurable balance | S-02 | FR-004, FR-005, FR-006, FR-007 | proposed |
 | S-04 | diary-session-chart | open Trader’s Diary analysis path with session chart + buy/sell markers (no mandatory End) | S-03 | US-01, FR-008, FR-009 | proposed |
 | S-05 | ai-coach-verdict | receive AI Verdict / AI Analysis from logic rules + coaching analysis | S-04 | US-01, FR-010 | blocked |
@@ -71,7 +71,7 @@ No cross-cutting foundations. Companion UI shell, candle storage, and local LLM 
 - **Blockers:** —
 - **Unknowns:** —
 - **Risk:** First slice stands up the companion UI + API surface; keep scope to load + render so playback/trading stay unblocked
-- **Status:** in-progress
+- **Status:** done
 
 ### S-02: Playback controls
 
@@ -83,7 +83,7 @@ No cross-cutting foundations. Companion UI shell, candle storage, and local LLM 
 - **Blockers:** —
 - **Unknowns:** —
 - **Risk:** Depends on a working candle chart; avoid baking trade logic into this slice
-- **Status:** proposed
+- **Status:** in-progress
 
 ### S-03: Open and close simulated positions
 
@@ -147,4 +147,4 @@ No cross-cutting foundations. Companion UI shell, candle storage, and local LLM 
 
 ## Done
 
-(Empty on first generation. `/10x-archive` appends entries here.)
+- **S-01: user can load historical market candles into the simulator (file import or pre-session download) and see them on the chart** — Archived 2026-11-08 → `context/archive/2026-11-07-load-candles-chart/`. Lesson: —.

@@ -13,10 +13,19 @@ interface TradingChartProps {
   candles: MarketData[]
 }
 
+interface SeriesSnapshot {
+  length: number
+  firstTimestamp: string | null
+}
+
 export default function TradingChart({ candles }: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const snapshotRef = useRef<SeriesSnapshot>({
+    length: 0,
+    firstTimestamp: null,
+  })
 
   useEffect(() => {
     const container = containerRef.current
@@ -59,6 +68,7 @@ export default function TradingChart({ candles }: TradingChartProps) {
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
+      snapshotRef.current = { length: 0, firstTimestamp: null }
     }
   }, [])
 
@@ -71,28 +81,46 @@ export default function TradingChart({ candles }: TradingChartProps) {
 
     if (candles.length === 0) {
       series.setData([])
+      snapshotRef.current = { length: 0, firstTimestamp: null }
+      return
+    }
+
+    const firstTimestamp = candles[0]!.timestamp
+    const prev = snapshotRef.current
+    const isSingleCandleAdvance =
+      prev.length > 0 &&
+      prev.firstTimestamp === firstTimestamp &&
+      candles.length === prev.length + 1
+
+    if (isSingleCandleAdvance) {
+      const nextBar = toCandlestickBar(candles[candles.length - 1]!)
+      if (nextBar) {
+        series.update(nextBar)
+        snapshotRef.current = {
+          length: candles.length,
+          firstTimestamp,
+        }
+      }
       return
     }
 
     const data = []
     for (const candle of candles) {
-      const time = tryUtcTimestamp(candle.timestamp)
-      if (time === null) {
+      const bar = toCandlestickBar(candle)
+      if (bar === null) {
         console.warn('Skipping candle with invalid timestamp:', candle.timestamp)
         continue
       }
-      data.push({
-        time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      })
+      data.push(bar)
     }
 
     series.setData(data)
     if (data.length > 0) {
       chart.timeScale().fitContent()
+    }
+    snapshotRef.current = {
+      length: candles.length,
+      firstTimestamp,
     }
   }, [candles])
 
@@ -109,6 +137,26 @@ export default function TradingChart({ candles }: TradingChartProps) {
       />
     </div>
   )
+}
+
+function toCandlestickBar(candle: MarketData): {
+  time: UTCTimestamp
+  open: number
+  high: number
+  low: number
+  close: number
+} | null {
+  const time = tryUtcTimestamp(candle.timestamp)
+  if (time === null) {
+    return null
+  }
+  return {
+    time,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+  }
 }
 
 function tryUtcTimestamp(value: string): UTCTimestamp | null {

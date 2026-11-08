@@ -33,7 +33,8 @@ export async function fetchByBitCandles(
   const query = new URLSearchParams({
     symbol: params.symbol,
     interval: params.interval,
-    limit: String(params.limit ?? 200),
+    // ByBit single-request max is 1000 (clamped server-side); no pagination yet.
+    limit: String(params.limit ?? 1000),
   })
 
   const response = await fetch(`/api/data/bybit?${query.toString()}`, {
