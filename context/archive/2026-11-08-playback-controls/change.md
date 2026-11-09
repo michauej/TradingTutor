@@ -1,10 +1,10 @@
 ---
 change_id: playback-controls
 title: Playback controls
-status: implementing
+status: archived
 created: 2026-11-08
 updated: 2026-11-08
-archived_at: null
+archived_at: 2026-11-08T14:29:55Z
 ---
 
 ## Notes
