@@ -147,6 +147,119 @@
   color: #ef5350;
 }
 
+.diary-coach h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.diary-coach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.diary-coach-analyze,
+.diary-coach-retry {
+  padding: 0.45rem 0.9rem;
+  border: none;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.diary-coach-analyze:hover:not(:disabled),
+.diary-coach-retry:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.diary-coach-analyze:disabled,
+.diary-coach-retry:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--border);
+  color: var(--text-muted);
+}
+
+.diary-coach-hint,
+.diary-coach-status {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.diary-coach-error {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #ef5350;
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, #ef5350 10%, transparent);
+}
+
+.diary-coach-error p {
+  margin: 0 0 0.5rem;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.diary-coach-result {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.diary-coach-block h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.diary-coach-block p,
+.diary-coach-analysis {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.diary-coach-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.diary-coach-findings li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: baseline;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.diary-coach-finding-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.diary-coach-finding-sev {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
 .load-form {
   display: flex;
   flex-wrap: wrap;

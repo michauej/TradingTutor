@@ -24,6 +24,7 @@ interface TradingChartProps {
 interface SeriesSnapshot {
   length: number
   firstTimestamp: string | null
+  lastTimestamp: string | null
 }
 
 export default function TradingChart({
@@ -42,7 +43,9 @@ export default function TradingChart({
   const snapshotRef = useRef<SeriesSnapshot>({
     length: 0,
     firstTimestamp: null,
+    lastTimestamp: null,
   })
+  const spanKeyRef = useRef<string>('')
 
   useEffect(() => {
     const container = containerRef.current
@@ -94,7 +97,12 @@ export default function TradingChart({
       chartRef.current = null
       seriesRef.current = null
       markersPluginRef.current = null
-      snapshotRef.current = { length: 0, firstTimestamp: null }
+      snapshotRef.current = {
+        length: 0,
+        firstTimestamp: null,
+        lastTimestamp: null,
+      }
+      spanKeyRef.current = ''
     }
   }, [])
 
@@ -107,12 +115,28 @@ export default function TradingChart({
 
     if (candles.length === 0) {
       series.setData([])
-      snapshotRef.current = { length: 0, firstTimestamp: null }
+      snapshotRef.current = {
+        length: 0,
+        firstTimestamp: null,
+        lastTimestamp: null,
+      }
       return
     }
 
     const firstTimestamp = candles[0]!.timestamp
+    const lastTimestamp = candles[candles.length - 1]!.timestamp
     const prev = snapshotRef.current
+
+    // Parent often passes a fresh array slice with the same window — do not
+    // setData/fitContent on those no-op reference changes (trades remount zoom).
+    const isUnchangedWindow =
+      prev.length === candles.length &&
+      prev.firstTimestamp === firstTimestamp &&
+      prev.lastTimestamp === lastTimestamp
+    if (isUnchangedWindow) {
+      return
+    }
+
     const isSingleCandleAdvance =
       prev.length > 0 &&
       prev.firstTimestamp === firstTimestamp &&
@@ -125,6 +149,7 @@ export default function TradingChart({
         snapshotRef.current = {
           length: candles.length,
           firstTimestamp,
+          lastTimestamp,
         }
       }
       return
@@ -147,18 +172,30 @@ export default function TradingChart({
     snapshotRef.current = {
       length: candles.length,
       firstTimestamp,
+      lastTimestamp,
     }
   }, [candles])
 
   useEffect(() => {
     markersPluginRef.current?.setMarkers(markers)
-  }, [markers, candles])
+  }, [markers])
 
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) {
       return
     }
+
+    const nextKey = tradeSpans
+      .map(
+        (span) =>
+          `${span.id}:${span.color}:${span.points.map((p) => `${p.time},${p.value}`).join('|')}`,
+      )
+      .join(';')
+    if (nextKey === spanKeyRef.current) {
+      return
+    }
+    spanKeyRef.current = nextKey
 
     for (const spanSeries of spanSeriesRef.current) {
       chart.removeSeries(spanSeries)
@@ -174,11 +211,13 @@ export default function TradingChart({
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
+        // Keep entry→exit connectors from hijacking candle price autoscale.
+        autoscaleInfoProvider: () => null,
       })
       line.setData(span.points)
       spanSeriesRef.current.push(line)
     }
-  }, [tradeSpans, candles])
+  }, [tradeSpans])
 
   return (
     <div className="chart-panel">

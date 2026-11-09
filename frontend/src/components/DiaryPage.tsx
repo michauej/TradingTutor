@@ -1,14 +1,26 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { getAnalyzeGate, mapClosedTradesForCoach } from '../coach'
 import {
   BUY_MARKER_COLOR,
   SELL_MARKER_COLOR,
   buildTradeMarkers,
   buildTradeSpans,
 } from '../diary'
+import {
+  ApiError,
+  fetchCoachAnalyze,
+  type CoachAnalyzeResult,
+} from '../services/api'
 import { useSession } from '../session'
 import type { ClosedTrade, Lot, Side } from '../trading'
 import TradingChart from './TradingChart'
+
+type CoachPanelState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; result: CoachAnalyzeResult }
+  | { status: 'error'; message: string }
 
 type SideFilter = 'all' | Side
 
@@ -147,11 +159,22 @@ export default function DiaryPage() {
   } = useSession()
 
   const [filters, setFilters] = useState<DiaryFilters>(EMPTY_FILTERS)
+  const [coachState, setCoachState] = useState<CoachPanelState>({
+    status: 'idle',
+  })
+  const coachAbortRef = useRef<AbortController | null>(null)
 
   // Pause once on diary entry; do not auto-resume when returning to sim.
   useEffect(() => {
     handlePause()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only pause
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      coachAbortRef.current?.abort()
+      coachAbortRef.current = null
+    }
   }, [])
 
   const filteredClosed = useMemo(
@@ -163,12 +186,17 @@ export default function DiaryPage() {
     [lots, filters],
   )
 
-  const markers = buildTradeMarkers(
-    filteredClosed,
-    filteredLots,
-    visibleCandles,
+  const markers = useMemo(
+    () => buildTradeMarkers(filteredClosed, filteredLots, visibleCandles),
+    [filteredClosed, filteredLots, visibleCandles],
   )
-  const tradeSpans = buildTradeSpans(filteredClosed, visibleCandles)
+  const tradeSpans = useMemo(
+    () => buildTradeSpans(filteredClosed, visibleCandles),
+    [filteredClosed, visibleCandles],
+  )
+
+  const analyzeGate = getAnalyzeGate(closedTrades.length)
+  const canAnalyze = sessionLocked && analyzeGate.canAnalyze
 
   const filtersActive =
     filters.side !== 'all' ||
@@ -176,6 +204,40 @@ export default function DiaryPage() {
     filters.timeTo !== '' ||
     filters.qtyMin !== '' ||
     filters.qtyMax !== ''
+
+  async function runAnalyze() {
+    if (!canAnalyze) {
+      return
+    }
+
+    coachAbortRef.current?.abort()
+    const controller = new AbortController()
+    coachAbortRef.current = controller
+    setCoachState({ status: 'loading' })
+
+    try {
+      const result = await fetchCoachAnalyze({
+        closedTrades: mapClosedTradesForCoach(closedTrades),
+        signal: controller.signal,
+      })
+      setCoachState({ status: 'success', result })
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return
+      }
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Coach analysis failed.'
+      setCoachState({ status: 'error', message })
+    } finally {
+      if (coachAbortRef.current === controller) {
+        coachAbortRef.current = null
+      }
+    }
+  }
 
   if (!sessionLocked) {
     return (
@@ -327,6 +389,15 @@ export default function DiaryPage() {
         tradeSpans={tradeSpans}
       />
 
+      <CoachAnalyzePanel
+        canAnalyze={canAnalyze}
+        hint={analyzeGate.hint}
+        state={coachState}
+        onAnalyze={() => {
+          void runAnalyze()
+        }}
+      />
+
       <ClosedTradesList
         trades={filteredClosed}
         emptyLabel={
@@ -344,6 +415,90 @@ export default function DiaryPage() {
         }
       />
     </div>
+  )
+}
+
+function CoachAnalyzePanel({
+  canAnalyze,
+  hint,
+  state,
+  onAnalyze,
+}: {
+  canAnalyze: boolean
+  hint: string
+  state: CoachPanelState
+  onAnalyze: () => void
+}) {
+  const loading = state.status === 'loading'
+
+  return (
+    <section className="diary-coach diary-trades" aria-label="AI coach analysis">
+      <h2>AI Verdict / Analysis</h2>
+      <div className="diary-coach-actions">
+        <button
+          type="button"
+          className="diary-coach-analyze"
+          disabled={!canAnalyze || loading}
+          onClick={onAnalyze}
+        >
+          {loading ? 'Analyzing…' : 'Analyze'}
+        </button>
+        {!canAnalyze && hint ? (
+          <p className="diary-coach-hint">{hint}</p>
+        ) : null}
+      </div>
+
+      {state.status === 'loading' ? (
+        <p className="diary-coach-status" aria-live="polite">
+          Running rules and requesting coaching analysis…
+        </p>
+      ) : null}
+
+      {state.status === 'error' ? (
+        <div className="diary-coach-error" role="alert">
+          <p>{state.message}</p>
+          <button
+            type="button"
+            className="diary-coach-retry"
+            disabled={!canAnalyze || loading}
+            onClick={onAnalyze}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+
+      {state.status === 'success' ? (
+        <div className="diary-coach-result">
+          <div className="diary-coach-block">
+            <h3>Verdict</h3>
+            <p>{state.result.verdict}</p>
+          </div>
+          <div className="diary-coach-block">
+            <h3>Analysis</h3>
+            <p className="diary-coach-analysis">{state.result.analysis}</p>
+          </div>
+          <div className="diary-coach-block">
+            <h3>Rule findings</h3>
+            {state.result.findings.length === 0 ? (
+              <p className="empty-hint">No rule findings for this batch.</p>
+            ) : (
+              <ul className="diary-coach-findings">
+                {state.result.findings.map((finding) => (
+                  <li key={finding.id}>
+                    <span className="diary-coach-finding-id">{finding.id}</span>
+                    <span className="diary-coach-finding-sev">
+                      {finding.severity}
+                    </span>
+                    <span>{finding.message}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </section>
   )
 }
 

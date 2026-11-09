@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { buildTradeMarkers, buildTradeSpans } from '../diary'
 import { type PlaybackSpeed } from '../playback'
@@ -124,6 +124,15 @@ export default function Dashboard() {
   const [tpQtyInput, setTpQtyInput] = useState('0.01')
   const [slPriceInput, setSlPriceInput] = useState('')
   const [slQtyInput, setSlQtyInput] = useState('0.01')
+
+  const chartMarkers = useMemo(
+    () => buildTradeMarkers(closedTrades, lots, visibleCandles),
+    [closedTrades, lots, visibleCandles],
+  )
+  const chartTradeSpans = useMemo(
+    () => buildTradeSpans(closedTrades, visibleCandles),
+    [closedTrades, visibleCandles],
+  )
 
   function resolveOpenQty():
     | { ok: true; qty: number }
@@ -760,8 +769,8 @@ export default function Dashboard() {
 
       <TradingChart
         candles={visibleCandles}
-        markers={buildTradeMarkers(closedTrades, lots, visibleCandles)}
-        tradeSpans={buildTradeSpans(closedTrades, visibleCandles)}
+        markers={chartMarkers}
+        tradeSpans={chartTradeSpans}
       />
     </div>
   )

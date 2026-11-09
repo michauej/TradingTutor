@@ -1,10 +1,10 @@
 ---
 change_id: s-04
 title: Trader’s Diary session chart
-status: implementing
+status: archived
 created: 2026-11-09
 updated: 2026-11-09
-archived_at: null
+archived_at: 2026-11-09T13:03:43Z
 ---
 
 ## Notes

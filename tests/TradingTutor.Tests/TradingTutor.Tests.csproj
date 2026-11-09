@@ -19,6 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\backend\TradingTutor.Coaching\TradingTutor.Coaching.csproj" />
+    <ProjectReference Include="..\..\backend\TradingTutor.Core\TradingTutor.Core.csproj" />
     <ProjectReference Include="..\..\backend\TradingTutor.Trading\TradingTutor.Trading.csproj" />
   </ItemGroup>
 

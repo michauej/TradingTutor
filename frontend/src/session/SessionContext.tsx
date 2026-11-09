@@ -1,6 +1,7 @@
 import {
   createContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -171,7 +172,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           candles,
           sessionStartDate || candles[0]!.timestamp,
         )
-  const visibleCandles = candles.slice(sessionStartIndex, playhead)
+  const visibleCandles = useMemo(
+    () => candles.slice(sessionStartIndex, playhead),
+    [candles, sessionStartIndex, playhead],
+  )
   const atEnd = isAtEnd(playhead, candles.length)
   const hasCandles = candles.length > 0
   const mark = markFromCandles(visibleCandles)

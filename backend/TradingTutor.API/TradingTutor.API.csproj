@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\TradingTutor.Coaching\TradingTutor.Coaching.csproj" />
     <ProjectReference Include="..\TradingTutor.Core\TradingTutor.Core.csproj" />
     <ProjectReference Include="..\TradingTutor.Trading\TradingTutor.Trading.csproj" />
   </ItemGroup>
