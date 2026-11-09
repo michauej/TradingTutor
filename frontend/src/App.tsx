@@ -1,8 +1,21 @@
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Dashboard from './components/Dashboard'
+import DiaryPage from './components/DiaryPage'
+import { SessionProvider } from './session'
 import './App.css'
 
 function App() {
-  return <Dashboard />
+  return (
+    <BrowserRouter>
+      <SessionProvider>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/diary" element={<DiaryPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </SessionProvider>
+    </BrowserRouter>
+  )
 }
 
 export default App

@@ -1,31 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { buildTradeMarkers, buildTradeSpans } from '../diary'
+import { type PlaybackSpeed } from '../playback'
+import { useSession } from '../session'
 import {
-  advancePlayhead,
-  delayForSpeed,
-  initialPlayhead,
-  isAtEnd,
-  resolveSessionStartIndex,
-  type PlaybackSpeed,
-} from '../playback'
-import { ApiError, fetchByBitCandles, type MarketData } from '../services/api'
-import {
-  accountBalance,
-  cancelOrder,
-  closeAll,
-  closeLotById,
-  closeQtyFifo,
-  markFromCandles,
-  matchLimits,
-  netSides,
-  nextTradingId,
-  openMarket,
-  placeLimitOrder,
-  placeStopOrder,
   qtyFromPercent,
   realizedPnl as calcUnrealizedPnl,
   validateQtyAgainstSoftCap,
-  type ClosedTrade,
-  type Lot,
   type Order,
   type Side,
 } from '../trading'
@@ -33,26 +14,9 @@ import TradingChart from './TradingChart'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5]
-const DEFAULT_STARTING_BALANCE = 10_000
 
 type SizingMode = 'qty' | 'percent'
 type OrderTicketType = 'market' | 'limit'
-
-function isAbortError(err: unknown): boolean {
-  return (
-    (err instanceof DOMException && err.name === 'AbortError') ||
-    (err instanceof Error && err.name === 'AbortError')
-  )
-}
-
-/** `YYYY-MM-DD` for `<input type="date">` from an ISO timestamp. */
-function toDateInputValue(iso: string): string {
-  const ms = Date.parse(iso)
-  if (Number.isNaN(ms)) {
-    return ''
-  }
-  return new Date(ms).toISOString().slice(0, 10)
-}
 
 function formatPrice(value: number): string {
   return value.toLocaleString(undefined, {
@@ -83,33 +47,69 @@ function formatPnlPercent(value: number): string {
   })}%`
 }
 
-function emptyTradingState() {
-  return {
-    lots: [] as Lot[],
-    pendingOrders: [] as Order[],
-    closedTrades: [] as ClosedTrade[],
-    realizedPnl: 0,
+function pendingOrderLabel(order: Order): string {
+  if (order.intent === 'close' && order.type === 'limit') {
+    return 'take profit'
   }
+  if (order.intent === 'close' && order.type === 'stop') {
+    return 'stop loss'
+  }
+  if (order.intent === 'open' && order.type === 'limit') {
+    return 'limit open'
+  }
+  if (order.intent === 'open' && order.type === 'stop') {
+    return 'stop open'
+  }
+  return `${order.type} ${order.intent}`
 }
 
 export default function Dashboard() {
-  const [symbol, setSymbol] = useState('BTCUSDT')
-  const [interval, setInterval] = useState<string>('1h')
-  const [candles, setCandles] = useState<MarketData[]>([])
-  const [sessionStartDate, setSessionStartDate] = useState('')
-  const [playhead, setPlayhead] = useState(0)
-  const [playing, setPlaying] = useState(false)
-  const [speed, setSpeed] = useState<PlaybackSpeed>(1)
-  const [sessionLocked, setSessionLocked] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [tradeMessage, setTradeMessage] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  const [startingBalance, setStartingBalance] = useState(DEFAULT_STARTING_BALANCE)
-  const [lots, setLots] = useState<Lot[]>([])
-  const [pendingOrders, setPendingOrders] = useState<Order[]>([])
-  const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>([])
-  const [realizedPnl, setRealizedPnl] = useState(0)
+  const session = useSession()
+  const {
+    symbol,
+    setSymbol,
+    interval,
+    setInterval,
+    sessionStartDate,
+    playing,
+    speed,
+    sessionLocked,
+    error,
+    tradeMessage,
+    setTradeMessage,
+    loading,
+    startingBalance,
+    setStartingBalance,
+    lots,
+    pendingOrders,
+    closedTrades,
+    realizedPnl,
+    sessionStartIndex,
+    visibleCandles,
+    atEnd,
+    hasCandles,
+    mark,
+    balance,
+    nets,
+    canTrade,
+    dateMin,
+    dateMax,
+    candles,
+    playhead,
+    handleLoad,
+    handleSessionStartDateChange,
+    handlePlay,
+    handlePause,
+    setSpeed,
+    openMarketOrder,
+    placeOpenLimit,
+    marketCloseFifo,
+    closeOpenLot,
+    closeAllPositions,
+    placeTakeProfit,
+    placeStopLoss,
+    cancelPendingOrder,
+  } = session
 
   const [ticketSide, setTicketSide] = useState<Side>('long')
   const [ticketType, setTicketType] = useState<OrderTicketType>('market')
@@ -124,185 +124,6 @@ export default function Dashboard() {
   const [tpQtyInput, setTpQtyInput] = useState('0.01')
   const [slPriceInput, setSlPriceInput] = useState('')
   const [slQtyInput, setSlQtyInput] = useState('0.01')
-
-  const loadAbortRef = useRef<AbortController | null>(null)
-  const playheadRef = useRef(playhead)
-  const candlesRef = useRef(candles)
-  const tradingRef = useRef({
-    lots,
-    pendingOrders,
-    closedTrades,
-    realizedPnl,
-    startingBalance,
-  })
-
-  const sessionStartIndex =
-    candles.length === 0
-      ? 0
-      : resolveSessionStartIndex(
-          candles,
-          sessionStartDate || candles[0]!.timestamp,
-        )
-  const visibleCandles = candles.slice(sessionStartIndex, playhead)
-  const atEnd = isAtEnd(playhead, candles.length)
-  const hasCandles = candles.length > 0
-  const mark = markFromCandles(visibleCandles)
-  const balance = accountBalance({ startingBalance, realizedPnl })
-  const nets = netSides(lots)
-  const canTrade = sessionLocked && mark != null
-
-  useEffect(() => {
-    return () => {
-      loadAbortRef.current?.abort()
-    }
-  }, [])
-
-  useEffect(() => {
-    playheadRef.current = playhead
-  }, [playhead])
-
-  useEffect(() => {
-    candlesRef.current = candles
-  }, [candles])
-
-  useEffect(() => {
-    tradingRef.current = {
-      lots,
-      pendingOrders,
-      closedTrades,
-      realizedPnl,
-      startingBalance,
-    }
-  }, [lots, pendingOrders, closedTrades, realizedPnl, startingBalance])
-
-  const applyLimitMatchRef = useRef((newBar: MarketData) => {
-    const current = tradingRef.current
-    if (current.pendingOrders.length === 0) {
-      return
-    }
-    const paperBalance = current.startingBalance + current.realizedPnl
-    const matched = matchLimits({
-      orders: current.pendingOrders,
-      lots: current.lots,
-      bar: newBar,
-      balance: paperBalance,
-    })
-
-    tradingRef.current = {
-      ...current,
-      lots: matched.lots,
-      pendingOrders: matched.orders,
-      closedTrades: [...current.closedTrades, ...matched.closedTrades],
-      realizedPnl: current.realizedPnl + matched.realizedPnlDelta,
-    }
-
-    setLots(matched.lots)
-    setPendingOrders(matched.orders)
-    if (matched.closedTrades.length > 0) {
-      setClosedTrades((prev) => [...prev, ...matched.closedTrades])
-    }
-    if (matched.realizedPnlDelta !== 0) {
-      setRealizedPnl((prev) => prev + matched.realizedPnlDelta)
-    }
-    if (matched.cancelled.length > 0) {
-      const ids = matched.cancelled.map((c) => c.order.id).join(', ')
-      setTradeMessage(
-        `Limit order(s) cancelled (soft cap at fill): ${ids}`,
-      )
-    } else if (matched.filled.length > 0) {
-      setTradeMessage(
-        `Filled ${matched.filled.length} limit order(s) on new bar.`,
-      )
-    }
-  })
-
-  // Wall-clock playback tick; delay retargets when speed changes while playing.
-  // Limit matching runs once per successful playhead +1 against the newly revealed bar.
-  useEffect(() => {
-    if (!playing) {
-      return
-    }
-
-    const length = candles.length
-    const timerId = window.setInterval(() => {
-      const previous = playheadRef.current
-      const result = advancePlayhead(previous, length)
-      if (result.playhead > previous) {
-        const newBar = candlesRef.current[result.playhead - 1]
-        if (newBar) {
-          applyLimitMatchRef.current(newBar)
-        }
-      }
-      setPlayhead(result.playhead)
-      if (result.kind === 'atEnd') {
-        setPlaying(false)
-      }
-    }, delayForSpeed(speed))
-
-    return () => {
-      window.clearInterval(timerId)
-    }
-  }, [playing, speed, candles.length])
-
-  function syncTradingRef(
-    patch: Partial<{
-      lots: Lot[]
-      pendingOrders: Order[]
-      closedTrades: ClosedTrade[]
-      realizedPnl: number
-      startingBalance: number
-    }>,
-  ) {
-    tradingRef.current = { ...tradingRef.current, ...patch }
-  }
-
-  function resetTrading() {
-    const empty = emptyTradingState()
-    setLots(empty.lots)
-    setPendingOrders(empty.pendingOrders)
-    setClosedTrades(empty.closedTrades)
-    setRealizedPnl(empty.realizedPnl)
-    setTradeMessage(null)
-    syncTradingRef({
-      lots: empty.lots,
-      pendingOrders: empty.pendingOrders,
-      closedTrades: empty.closedTrades,
-      realizedPnl: empty.realizedPnl,
-      startingBalance,
-    })
-  }
-
-  function resetSessionFromCandles(data: MarketData[], startDate: string) {
-    const startIndex =
-      data.length === 0 ? 0 : resolveSessionStartIndex(data, startDate)
-    setCandles(data)
-    setSessionStartDate(startDate)
-    setPlayhead(initialPlayhead(startIndex, data.length))
-    setPlaying(false)
-    resetTrading()
-  }
-
-  function handleSessionStartDateChange(nextDate: string) {
-    if (sessionLocked || candles.length === 0) {
-      return
-    }
-    const startIndex = resolveSessionStartIndex(candles, nextDate)
-    setSessionStartDate(nextDate)
-    setPlayhead(initialPlayhead(startIndex, candles.length))
-    setPlaying(false)
-  }
-
-  function handlePlay() {
-    if (!hasCandles || atEnd || playing) {
-      return
-    }
-    setSessionLocked(true)
-    setPlaying(true)
-  }
-
-  function handlePause() {
-    setPlaying(false)
-  }
 
   function resolveOpenQty():
     | { ok: true; qty: number }
@@ -328,15 +149,6 @@ export default function Dashboard() {
 
   function handleOpenSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!canTrade || !mark) {
-      setTradeMessage(
-        sessionLocked
-          ? 'Cannot trade without a mark candle.'
-          : 'Play once to lock the session before trading.',
-      )
-      return
-    }
-
     const sized = resolveOpenQty()
     if (!sized.ok) {
       setTradeMessage(sized.message)
@@ -344,179 +156,80 @@ export default function Dashboard() {
     }
 
     if (ticketType === 'market') {
-      const opened = openMarket({
-        lots,
-        side: ticketSide,
-        qty: sized.qty,
-        markPrice: mark.markPrice,
-        markTime: mark.markTime,
-        balance,
-      })
+      const opened = openMarketOrder({ side: ticketSide, qty: sized.qty })
       if (!opened.ok) {
         setTradeMessage(opened.message)
         return
       }
-      setLots(opened.lots)
-      syncTradingRef({ lots: opened.lots })
       setTradeMessage(
-        `Opened ${ticketSide} market qty ${formatPrice(sized.qty)} @ ${formatPrice(mark.markPrice)}.`,
+        `Opened ${ticketSide} market qty ${formatPrice(sized.qty)} @ ${formatPrice(mark!.markPrice)}.`,
       )
       return
     }
 
     const limitPrice = Number(limitPriceInput)
-    if (!(limitPrice > 0)) {
-      setTradeMessage('Limit price must be positive.')
-      return
-    }
-    const order: Order = {
-      id: nextTradingId('ord'),
+    const placed = placeOpenLimit({
       side: ticketSide,
-      intent: 'open',
-      type: 'limit',
       qty: sized.qty,
       limitPrice,
-      createdAt: mark.markTime,
+    })
+    if (!placed.ok) {
+      setTradeMessage(placed.message)
+      return
     }
-    const nextOrders = placeLimitOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
     setTradeMessage(
       `Resting ${ticketSide} limit open qty ${formatPrice(sized.qty)} @ ${formatPrice(limitPrice)}.`,
     )
   }
 
-  function availableQty(side: Side): number {
-    return side === 'long' ? nets.long.qty : nets.short.qty
-  }
-
   function handleMarketClose(event: FormEvent) {
     event.preventDefault()
-    if (!canTrade || !mark) {
-      setTradeMessage('Cannot close — session locked with a mark candle required.')
-      return
-    }
     const qty = Number(closeQtyInput)
-    if (!(qty > 0)) {
-      setTradeMessage('Close qty must be positive.')
-      return
-    }
-    const closed = closeQtyFifo(
-      lots,
-      closeSide,
-      qty,
-      mark.markPrice,
-      mark.markTime,
-    )
+    const closed = marketCloseFifo({ side: closeSide, qty })
     if (!closed.ok) {
       setTradeMessage(closed.message)
       return
     }
-    const nextTrades = [...closedTrades, ...closed.closedTrades]
-    const nextPnl = realizedPnl + closed.realizedPnl
-    setLots(closed.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: closed.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
     setTradeMessage(
-      `Market closed ${closeSide} qty ${formatPrice(qty)} FIFO @ ${formatPrice(mark.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
+      `Market closed ${closeSide} qty ${formatPrice(qty)} FIFO @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
     )
   }
 
   function handleCloseOpenLot(lotId: string) {
-    if (!canTrade || !mark) {
-      setTradeMessage('Cannot close — session locked with a mark candle required.')
-      return
-    }
-    const closed = closeLotById({
-      lots,
-      lotId,
-      exitPrice: mark.markPrice,
-      exitTime: mark.markTime,
-    })
+    const closed = closeOpenLot(lotId)
     if (!closed.ok) {
       setTradeMessage(closed.message)
       return
     }
-    const nextTrades = [...closedTrades, closed.closedTrade]
-    const nextPnl = realizedPnl + closed.realizedPnl
-    setLots(closed.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: closed.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
     setTradeMessage(
-      `Closed ${closed.closedTrade.side} qty ${formatPrice(closed.closedTrade.qty)} @ ${formatPrice(mark.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
+      `Closed ${closed.side} qty ${formatPrice(closed.qty)} @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
     )
   }
 
   function handleCloseAll() {
-    if (!canTrade || !mark) {
-      setTradeMessage('Cannot close — session locked with a mark candle required.')
+    const flattened = closeAllPositions()
+    if (!flattened.ok) {
+      setTradeMessage(flattened.message)
       return
     }
-    if (lots.length === 0) {
-      setTradeMessage('Already flat — nothing to close.')
-      return
-    }
-    const flattened = closeAll({
-      lots,
-      exitPrice: mark.markPrice,
-      exitTime: mark.markTime,
-    })
-    const nextTrades = [...closedTrades, ...flattened.closedTrades]
-    const nextPnl = realizedPnl + flattened.realizedPnl
-    setLots(flattened.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: flattened.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
     setTradeMessage(
-      `Closed all (${flattened.closedTrades.length} lots) @ ${formatPrice(mark.markPrice)} (PnL ${formatPnl(flattened.realizedPnl)}).`,
+      `Closed all (${flattened.closedCount} lots) @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(flattened.realizedPnl)}).`,
     )
   }
 
   function handleTakeProfitSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!canTrade || !mark) {
-      setTradeMessage('Cannot place take profit — lock session and wait for mark.')
-      return
-    }
     const limitPrice = Number(tpPriceInput)
     const qty = Number(tpQtyInput)
-    if (!(limitPrice > 0) || !(qty > 0)) {
-      setTradeMessage('Take profit price and qty must be positive.')
-      return
-    }
-    const available = availableQty(closeSide)
-    if (qty > available + 1e-12) {
+    const placed = placeTakeProfit({ side: closeSide, qty, limitPrice })
+    if (!placed.ok) {
       setTradeMessage(
-        `TP qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(available)}.`,
+        placed.message.includes('exceeds')
+          ? `TP qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
+          : placed.message,
       )
       return
     }
-    const order: Order = {
-      id: nextTradingId('ord'),
-      side: closeSide,
-      intent: 'close',
-      type: 'limit',
-      qty,
-      limitPrice,
-      createdAt: mark.markTime,
-    }
-    const nextOrders = placeLimitOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
     setTradeMessage(
       `Take profit ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(limitPrice)}.`,
     )
@@ -524,114 +237,30 @@ export default function Dashboard() {
 
   function handleStopLossSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!canTrade || !mark) {
-      setTradeMessage('Cannot place stop loss — lock session and wait for mark.')
-      return
-    }
     const stopPrice = Number(slPriceInput)
     const qty = Number(slQtyInput)
-    if (!(stopPrice > 0) || !(qty > 0)) {
-      setTradeMessage('Stop loss price and qty must be positive.')
-      return
-    }
-    const available = availableQty(closeSide)
-    if (qty > available + 1e-12) {
+    const placed = placeStopLoss({ side: closeSide, qty, stopPrice })
+    if (!placed.ok) {
       setTradeMessage(
-        `SL qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(available)}.`,
+        placed.message.includes('exceeds')
+          ? `SL qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
+          : placed.message,
       )
       return
     }
-    const order: Order = {
-      id: nextTradingId('ord'),
-      side: closeSide,
-      intent: 'close',
-      type: 'stop',
-      qty,
-      limitPrice: stopPrice,
-      createdAt: mark.markTime,
-    }
-    const nextOrders = placeStopOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
     setTradeMessage(
       `Stop loss ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(stopPrice)}.`,
     )
   }
 
-  function pendingOrderLabel(order: Order): string {
-    if (order.intent === 'close' && order.type === 'limit') {
-      return 'take profit'
-    }
-    if (order.intent === 'close' && order.type === 'stop') {
-      return 'stop loss'
-    }
-    if (order.intent === 'open' && order.type === 'limit') {
-      return 'limit open'
-    }
-    if (order.intent === 'open' && order.type === 'stop') {
-      return 'stop open'
-    }
-    return `${order.type} ${order.intent}`
-  }
-
   function handleCancelOrder(orderId: string) {
-    const result = cancelOrder(pendingOrders, orderId)
-    if (!result.cancelled) {
-      setTradeMessage(`Order ${orderId} not found.`)
+    const result = cancelPendingOrder(orderId)
+    if (!result.ok) {
+      setTradeMessage(result.message)
       return
     }
-    setPendingOrders(result.orders)
-    syncTradingRef({ pendingOrders: result.orders })
     setTradeMessage(`Cancelled order ${orderId}.`)
   }
-
-  async function handleLoad(event: FormEvent) {
-    event.preventDefault()
-    if (sessionLocked) {
-      return
-    }
-
-    loadAbortRef.current?.abort()
-    const controller = new AbortController()
-    loadAbortRef.current = controller
-
-    setLoading(true)
-    setError(null)
-
-    try {
-      const data = await fetchByBitCandles({
-        symbol: symbol.trim().toUpperCase(),
-        interval,
-        signal: controller.signal,
-      })
-      const defaultStart =
-        data.length > 0 ? toDateInputValue(data[0]!.timestamp) : ''
-      resetSessionFromCandles(data, defaultStart)
-    } catch (err) {
-      if (isAbortError(err)) {
-        return
-      }
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'Failed to load candles'
-      setError(message)
-      // Keep previous candles / playback / trading state on failure (non-destructive).
-    } finally {
-      if (loadAbortRef.current === controller) {
-        setLoading(false)
-      }
-    }
-  }
-
-  const dateMin =
-    hasCandles && candles[0] ? toDateInputValue(candles[0].timestamp) : undefined
-  const dateMax =
-    hasCandles && candles[candles.length - 1]
-      ? toDateInputValue(candles[candles.length - 1]!.timestamp)
-      : undefined
 
   const statusText = (() => {
     if (!hasCandles) {
@@ -656,6 +285,15 @@ export default function Dashboard() {
           Load historical ByBit spot candles before a sim session (up to 1000
           bars per load until file ingest).
         </p>
+        {sessionLocked ? (
+          <Link className="diary-cta" to="/diary">
+            Open Trader&apos;s Diary
+          </Link>
+        ) : (
+          <span className="diary-cta diary-cta-disabled" title="Play once to lock the session">
+            Open Trader&apos;s Diary
+          </span>
+        )}
       </header>
 
       <form className="load-form" onSubmit={handleLoad}>
@@ -1120,7 +758,11 @@ export default function Dashboard() {
 
       <p className="status status-info">{statusText}</p>
 
-      <TradingChart candles={visibleCandles} />
+      <TradingChart
+        candles={visibleCandles}
+        markers={buildTradeMarkers(closedTrades, lots, visibleCandles)}
+        tradeSpans={buildTradeSpans(closedTrades, visibleCandles)}
+      />
     </div>
   )
 }

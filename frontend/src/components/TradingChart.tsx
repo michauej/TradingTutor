@@ -2,15 +2,23 @@ import { useEffect, useRef } from 'react'
 import {
   CandlestickSeries,
   ColorType,
+  LineSeries,
+  LineStyle,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type SeriesMarker,
   type UTCTimestamp,
 } from 'lightweight-charts'
+import { toUtcTimestamp, type TradeSpanLine } from '../diary'
 import type { MarketData } from '../services/api'
 
 interface TradingChartProps {
   candles: MarketData[]
+  markers?: SeriesMarker<UTCTimestamp>[]
+  /** Semi-transparent entry→exit connectors (diary only). */
+  tradeSpans?: TradeSpanLine[]
 }
 
 interface SeriesSnapshot {
@@ -18,10 +26,19 @@ interface SeriesSnapshot {
   firstTimestamp: string | null
 }
 
-export default function TradingChart({ candles }: TradingChartProps) {
+export default function TradingChart({
+  candles,
+  markers = [],
+  tradeSpans = [],
+}: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const markersPluginRef = useRef<{
+    setMarkers: (next: SeriesMarker<UTCTimestamp>[]) => void
+    detach: () => void
+  } | null>(null)
+  const spanSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const snapshotRef = useRef<SeriesSnapshot>({
     length: 0,
     firstTimestamp: null,
@@ -61,13 +78,22 @@ export default function TradingChart({ candles }: TradingChartProps) {
       wickDownColor: '#ef5350',
     })
 
+    const markersPlugin = createSeriesMarkers(series, [])
+
     chartRef.current = chart
     seriesRef.current = series
+    markersPluginRef.current = markersPlugin
 
     return () => {
+      for (const spanSeries of spanSeriesRef.current) {
+        chart.removeSeries(spanSeries)
+      }
+      spanSeriesRef.current = []
+      markersPlugin.detach()
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
+      markersPluginRef.current = null
       snapshotRef.current = { length: 0, firstTimestamp: null }
     }
   }, [])
@@ -124,6 +150,36 @@ export default function TradingChart({ candles }: TradingChartProps) {
     }
   }, [candles])
 
+  useEffect(() => {
+    markersPluginRef.current?.setMarkers(markers)
+  }, [markers, candles])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) {
+      return
+    }
+
+    for (const spanSeries of spanSeriesRef.current) {
+      chart.removeSeries(spanSeries)
+    }
+    spanSeriesRef.current = []
+
+    for (const span of tradeSpans) {
+      const line = chart.addSeries(LineSeries, {
+        color: span.color,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      line.setData(span.points)
+      spanSeriesRef.current.push(line)
+    }
+  }, [tradeSpans, candles])
+
   return (
     <div className="chart-panel">
       <h2>Chart</h2>
@@ -146,7 +202,7 @@ function toCandlestickBar(candle: MarketData): {
   low: number
   close: number
 } | null {
-  const time = tryUtcTimestamp(candle.timestamp)
+  const time = toUtcTimestamp(candle.timestamp)
   if (time === null) {
     return null
   }
@@ -157,12 +213,4 @@ function toCandlestickBar(candle: MarketData): {
     low: candle.low,
     close: candle.close,
   }
-}
-
-function tryUtcTimestamp(value: string): UTCTimestamp | null {
-  const ms = Date.parse(value)
-  if (Number.isNaN(ms)) {
-    return null
-  }
-  return Math.floor(ms / 1000) as UTCTimestamp
 }
