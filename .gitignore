@@ -30,5 +30,12 @@ Thumbs.db
 !.env.example
 appsettings.*.local.json
 
+## Local candle packs (downloaded market data)
+**/data/candles/
+**/*BTCUSDT*
+
+## Reference maps (local only)
+Crypto_Tools_REPO_MAP.md
+
 ## Cursor local (keep skills out of the remote by default)
 .cursor/

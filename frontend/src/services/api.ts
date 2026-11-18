@@ -17,6 +17,22 @@ export interface FetchByBitCandlesParams {
   signal?: AbortSignal
 }
 
+export interface FetchCandlesParams {
+  symbol: string
+  interval: string
+  startTime: string
+  endTime: string
+  refresh?: boolean
+  signal?: AbortSignal
+}
+
+export interface CandleLoadResponse {
+  candles: MarketData[]
+  source: 'local' | 'exchange' | 'partial' | string
+  incomplete: boolean
+  message?: string | null
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -27,13 +43,36 @@ export class ApiError extends Error {
   }
 }
 
+/** Orchestrated local-first candle load (preferred Load path). */
+export async function fetchCandles(
+  params: FetchCandlesParams,
+): Promise<CandleLoadResponse> {
+  const query = new URLSearchParams({
+    symbol: params.symbol,
+    interval: params.interval,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    refresh: String(params.refresh ?? false),
+  })
+
+  const response = await fetch(`/api/data/candles?${query.toString()}`, {
+    signal: params.signal,
+  })
+
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+
+  return (await response.json()) as CandleLoadResponse
+}
+
+/** Debug/single-page ByBit passthrough (≤1000 bars). Prefer fetchCandles for Load. */
 export async function fetchByBitCandles(
   params: FetchByBitCandlesParams,
 ): Promise<MarketData[]> {
   const query = new URLSearchParams({
     symbol: params.symbol,
     interval: params.interval,
-    // ByBit single-request max is 1000 (clamped server-side); no pagination yet.
     limit: String(params.limit ?? 1000),
   })
 

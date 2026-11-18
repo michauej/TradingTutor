@@ -3,13 +3,21 @@ using TradingTutor.Coaching;
 using TradingTutor.Coaching.Llm;
 using TradingTutor.Coaching.Rules;
 using TradingTutor.Trading.Interfaces;
+using TradingTutor.Trading.Options;
 using TradingTutor.Trading.Services;
+using TradingTutor.Trading.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
 builder.Services.AddHttpClient<IExchangeService, ByBitService>();
+
+builder.Services.Configure<CandleStorageOptions>(
+    builder.Configuration.GetSection(CandleStorageOptions.SectionName));
+builder.Services.AddSingleton<ICandlePackRepository, JsonCandlePackRepository>();
+builder.Services.AddScoped<ICandleLoadService, CandleLoadService>();
+
 
 builder.Services.Configure<CoachOptions>(builder.Configuration.GetSection(CoachOptions.SectionName));
 builder.Services.AddSingleton<FixedRulePack>();

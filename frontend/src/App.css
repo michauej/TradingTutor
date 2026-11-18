@@ -314,6 +314,14 @@
   cursor: not-allowed;
 }
 
+.load-form-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 .playback-controls {
   display: flex;
   flex-wrap: wrap;
@@ -596,6 +604,10 @@
 
 .status-error {
   color: var(--error);
+}
+
+.status-warning {
+  color: #a15c00;
 }
 
 .status-info {

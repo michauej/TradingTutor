@@ -75,4 +75,20 @@ describe('buildTradeSpans', () => {
     )
     expect(spans).toHaveLength(0)
   })
+
+  it('snaps lower-TF entry/exit onto containing higher-TF candles', () => {
+    const spans = buildTradeSpans(
+      [
+        trade({
+          id: 'c5',
+          entryTime: '2024-06-01T00:17:00.000Z',
+          exitTime: '2024-06-01T02:05:00.000Z',
+        }),
+      ],
+      visible,
+    )
+    expect(spans).toHaveLength(1)
+    expect(spans[0]?.points[0]?.time).toBe(toUtcTimestamp(T0))
+    expect(spans[0]?.points[1]?.time).toBe(toUtcTimestamp(T2))
+  })
 })

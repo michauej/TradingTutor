@@ -4,3 +4,15 @@ GET {{TradingTutor_HostAddress}}/api/data/bybit?symbol=BTCUSDT&interval=1h&limit
 Accept: application/json
 
 ###
+
+# Orchestrated load (local-first). Adjust start/end as needed.
+GET {{TradingTutor_HostAddress}}/api/data/candles?symbol=BTCUSDT&interval=1h&startTime=2024-11-01T00:00:00Z&endTime=2024-11-08T00:00:00Z&refresh=false
+Accept: application/json
+
+###
+
+# Force refresh from ByBit and merge into pack
+GET {{TradingTutor_HostAddress}}/api/data/candles?symbol=BTCUSDT&interval=1h&startTime=2024-11-01T00:00:00Z&endTime=2024-11-08T00:00:00Z&refresh=true
+Accept: application/json
+
+###

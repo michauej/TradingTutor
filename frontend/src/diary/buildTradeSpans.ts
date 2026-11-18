@@ -1,7 +1,7 @@
 import type { UTCTimestamp } from 'lightweight-charts'
 import type { MarketData } from '../services/api'
 import type { ClosedTrade } from '../trading/types'
-import { toUtcTimestamp } from './toUtcTimestamp'
+import { snapToCandleTimestamp } from './snapToCandle'
 
 /** Line opacity for entry→exit connectors on the diary chart. */
 export const TRADE_SPAN_OPACITY = 0.4
@@ -28,36 +28,25 @@ function spanColor(realizedPnl: number): string {
 }
 
 /**
- * Build semi-transparent entry→exit lines for closed trades whose times land on the revealed prefix.
+ * Build semi-transparent entry→exit lines for closed trades on the revealed prefix.
+ * Entry/exit times snap onto containing candles so spans survive timeframe switches.
  */
 export function buildTradeSpans(
   closedTrades: ClosedTrade[],
   visibleCandles: MarketData[],
 ): TradeSpanLine[] {
-  const visibleTimes = new Set<number>()
-  for (const candle of visibleCandles) {
-    const t = toUtcTimestamp(candle.timestamp)
-    if (t !== null) {
-      visibleTimes.add(t)
-    }
-  }
-
   const spans: TradeSpanLine[] = []
 
   for (const trade of closedTrades) {
-    const entryTime = toUtcTimestamp(trade.entryTime)
-    const exitTime = toUtcTimestamp(trade.exitTime)
+    const entryTime = snapToCandleTimestamp(visibleCandles, trade.entryTime)
+    const exitTime = snapToCandleTimestamp(visibleCandles, trade.exitTime)
     if (entryTime === null || exitTime === null) {
-      continue
-    }
-    if (!visibleTimes.has(entryTime) || !visibleTimes.has(exitTime)) {
       continue
     }
     if (exitTime < entryTime) {
       continue
     }
-    // Same-bar round-trip: still draw a degenerate two-point series at one time
-    // by using entry then exit prices — LineSeries needs ascending times, so skip.
+    // Same-bar round-trip: LineSeries needs ascending times, so skip.
     if (exitTime === entryTime) {
       continue
     }

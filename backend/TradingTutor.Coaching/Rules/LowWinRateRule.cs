@@ -10,9 +10,9 @@ namespace TradingTutor.Coaching.Rules;
 public sealed class LowWinRateRule : ICoachRule
 {
     public const int MinTrades = 5;
-    public const decimal WinRateThreshold = 0.50m;
+    public const decimal WinRateThreshold = 0.40m;
 
-    public string RuleId => "low-win-rate-50";
+    public string RuleId => "low-win-rate-40";
 
     public IReadOnlyList<RuleFinding> Evaluate(IReadOnlyList<ClosedTradeInput> trades)
     {

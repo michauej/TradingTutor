@@ -15,7 +15,7 @@ import {
   resolveSessionStartIndex,
   type PlaybackSpeed,
 } from '../playback'
-import { ApiError, fetchByBitCandles, type MarketData } from '../services/api'
+import { ApiError, fetchCandles, type MarketData } from '../services/api'
 import {
   accountBalance,
   cancelOrder,
@@ -34,8 +34,22 @@ import {
   type Order,
   type Side,
 } from '../trading'
+import {
+  defaultCandleRange,
+  formatCandleLoadStatus,
+} from './candleLoadRange'
+import {
+  classifyCoverageGap,
+  formatIntervalSwitchBlock,
+  playheadForTimestamp,
+  playheadTimestamp,
+  seriesCoversTimestamp,
+} from './intervalSwitch'
 
 const DEFAULT_STARTING_BALANCE = 10_000
+const DEFAULT_LAST_DAYS = 7
+
+type LoadRange = { startTime: string; endTime: string }
 
 function isAbortError(err: unknown): boolean {
   return (
@@ -66,7 +80,8 @@ export interface SessionContextValue {
   symbol: string
   setSymbol: (value: string) => void
   interval: string
-  setInterval: (value: string) => void
+  /** Pre-load interval pick, or lazy TF switch once candles exist (allowed during play). */
+  changeInterval: (value: string) => void
   candles: MarketData[]
   sessionStartDate: string
   playhead: number
@@ -74,9 +89,12 @@ export interface SessionContextValue {
   speed: PlaybackSpeed
   sessionLocked: boolean
   error: string | null
+  loadWarning: string | null
   tradeMessage: string | null
   setTradeMessage: (value: string | null) => void
   loading: boolean
+  lastDays: number
+  setLastDays: (value: number) => void
   startingBalance: number
   setStartingBalance: (value: number) => void
   lots: Lot[]
@@ -94,6 +112,7 @@ export interface SessionContextValue {
   dateMin: string | undefined
   dateMax: string | undefined
   handleLoad: (event: FormEvent) => Promise<void>
+  handleRefresh: () => Promise<void>
   handleSessionStartDateChange: (nextDate: string) => void
   handlePlay: () => void
   handlePause: () => void
@@ -145,8 +164,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [speed, setSpeed] = useState<PlaybackSpeed>(1)
   const [sessionLocked, setSessionLocked] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadWarning, setLoadWarning] = useState<string | null>(null)
   const [tradeMessage, setTradeMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [lastDays, setLastDays] = useState(DEFAULT_LAST_DAYS)
+  const [loadRange, setLoadRange] = useState<LoadRange | null>(null)
+  const [seriesCache, setSeriesCache] = useState<Record<string, MarketData[]>>(
+    {},
+  )
 
   const [startingBalance, setStartingBalance] = useState(DEFAULT_STARTING_BALANCE)
   const [lots, setLots] = useState<Lot[]>([])
@@ -157,6 +182,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const loadAbortRef = useRef<AbortController | null>(null)
   const playheadRef = useRef(playhead)
   const candlesRef = useRef(candles)
+  const intervalSwitchAbortRef = useRef<AbortController | null>(null)
   const tradingRef = useRef({
     lots,
     pendingOrders,
@@ -178,6 +204,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   )
   const atEnd = isAtEnd(playhead, candles.length)
   const hasCandles = candles.length > 0
+  // Fills use the active chart TF (trade on a lower TF for finer price/time).
+  // Markers/spans snap those times onto whatever TF is displayed.
   const mark = markFromCandles(visibleCandles)
   const balance = accountBalance({ startingBalance, realizedPnl })
   const nets = netSides(lots)
@@ -186,6 +214,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     return () => {
       loadAbortRef.current?.abort()
+      intervalSwitchAbortRef.current?.abort()
     }
   }, [])
 
@@ -589,28 +618,101 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return { ok: true }
   }
 
-  async function handleLoad(event: FormEvent) {
-    event.preventDefault()
-    if (sessionLocked) {
+  function applyIntervalSeries(
+    nextInterval: string,
+    nextCandles: MarketData[],
+    currentTime: string,
+  ): boolean {
+    if (!seriesCoversTimestamp(nextCandles, currentTime)) {
+      const reason = classifyCoverageGap(nextCandles, currentTime)
+      setLoadWarning(
+        formatIntervalSwitchBlock({
+          interval: nextInterval,
+          currentTime,
+          availableFrom: nextCandles[0]?.timestamp,
+          availableTo: nextCandles[nextCandles.length - 1]?.timestamp,
+          reason,
+        }),
+      )
+      return false
+    }
+
+    const nextPlayhead = playheadForTimestamp(nextCandles, currentTime)
+    setInterval(nextInterval)
+    setCandles(nextCandles)
+    setPlayhead(nextPlayhead)
+    setLoadWarning(
+      `Switched to ${nextInterval} at ${currentTime} (wall time preserved). ` +
+        'Lower timeframes may not reach as far back as higher ones.',
+    )
+    return true
+  }
+
+  async function switchChartInterval(nextInterval: string) {
+    if (nextInterval === interval) {
       return
     }
 
-    loadAbortRef.current?.abort()
-    const controller = new AbortController()
-    loadAbortRef.current = controller
+    if (candles.length === 0 || loadRange == null) {
+      setInterval(nextInterval)
+      return
+    }
 
+    const currentTime = playheadTimestamp(candles, playhead)
+    if (currentTime == null) {
+      setInterval(nextInterval)
+      return
+    }
+
+    const cached = seriesCache[nextInterval]
+    if (cached) {
+      applyIntervalSeries(nextInterval, cached, currentTime)
+      return
+    }
+
+    intervalSwitchAbortRef.current?.abort()
+    const controller = new AbortController()
+    intervalSwitchAbortRef.current = controller
+
+    const wasPlaying = playing
+    setPlaying(false)
     setLoading(true)
     setError(null)
 
     try {
-      const data = await fetchByBitCandles({
+      const result = await fetchCandles({
         symbol: symbol.trim().toUpperCase(),
-        interval,
+        interval: nextInterval,
+        startTime: loadRange.startTime,
+        endTime: loadRange.endTime,
+        refresh: false,
         signal: controller.signal,
       })
-      const defaultStart =
-        data.length > 0 ? toDateInputValue(data[0]!.timestamp) : ''
-      resetSessionFromCandles(data, defaultStart)
+
+      setSeriesCache((prev) => ({ ...prev, [nextInterval]: result.candles }))
+
+      if (result.candles.length === 0) {
+        setLoadWarning(
+          formatIntervalSwitchBlock({
+            interval: nextInterval,
+            currentTime,
+            reason: 'empty',
+          }),
+        )
+        return
+      }
+
+      const switched = applyIntervalSeries(
+        nextInterval,
+        result.candles,
+        currentTime,
+      )
+      if (switched && result.incomplete) {
+        setLoadWarning(
+          (prev) =>
+            `${prev ?? `Switched to ${nextInterval}.`} Warning: ${result.message ?? 'series incomplete.'}`,
+        )
+      }
     } catch (err) {
       if (isAbortError(err)) {
         return
@@ -621,12 +723,101 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           : err instanceof Error
             ? err.message
             : 'Failed to load candles'
+      setLoadWarning(
+        formatIntervalSwitchBlock({
+          interval: nextInterval,
+          currentTime,
+          reason: 'load-failed',
+          detail: message,
+        }),
+      )
+    } finally {
+      if (intervalSwitchAbortRef.current === controller) {
+        setLoading(false)
+      }
+      if (wasPlaying) {
+        // Leave paused after switch so the learner can verify the new TF.
+        setPlaying(false)
+      }
+    }
+  }
+
+  function changeInterval(nextInterval: string) {
+    if (candles.length > 0 && loadRange != null) {
+      void switchChartInterval(nextInterval)
+      return
+    }
+    setInterval(nextInterval)
+  }
+
+  async function loadCandles(refresh: boolean) {
+    if (sessionLocked) {
+      return
+    }
+
+    loadAbortRef.current?.abort()
+    const controller = new AbortController()
+    loadAbortRef.current = controller
+
+    setLoading(true)
+    setError(null)
+    setLoadWarning(null)
+
+    const range = defaultCandleRange({ lastDays, interval })
+
+    try {
+      const result = await fetchCandles({
+        symbol: symbol.trim().toUpperCase(),
+        interval,
+        startTime: range.startTime,
+        endTime: range.endTime,
+        refresh,
+        signal: controller.signal,
+      })
+
+      if (result.candles.length === 0) {
+        setError('No candles returned for the selected range.')
+        return
+      }
+
+      const defaultStart = toDateInputValue(result.candles[0]!.timestamp)
+      resetSessionFromCandles(result.candles, defaultStart)
+      setLoadRange(range)
+      setSeriesCache({ [interval]: result.candles })
+      setLoadWarning(
+        formatCandleLoadStatus({
+          source: result.source,
+          incomplete: result.incomplete,
+          message: result.message,
+          candleCount: result.candles.length,
+        }),
+      )
+    } catch (err) {
+      if (isAbortError(err)) {
+        return
+      }
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to load candles'
+      // Hard failure: keep any previously loaded good series.
       setError(message)
     } finally {
       if (loadAbortRef.current === controller) {
         setLoading(false)
       }
     }
+  }
+
+  async function handleLoad(event: FormEvent) {
+    event.preventDefault()
+    await loadCandles(false)
+  }
+
+  async function handleRefresh() {
+    await loadCandles(true)
   }
 
   const dateMin =
@@ -640,7 +831,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     symbol,
     setSymbol,
     interval,
-    setInterval,
+    changeInterval,
     candles,
     sessionStartDate,
     playhead,
@@ -648,9 +839,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     speed,
     sessionLocked,
     error,
+    loadWarning,
     tradeMessage,
     setTradeMessage,
     loading,
+    lastDays,
+    setLastDays,
     startingBalance,
     setStartingBalance,
     lots,
@@ -668,6 +862,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     dateMin,
     dateMax,
     handleLoad,
+    handleRefresh,
     handleSessionStartDateChange,
     handlePlay,
     handlePause,

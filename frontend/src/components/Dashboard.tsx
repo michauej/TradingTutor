@@ -13,6 +13,7 @@ import {
 import TradingChart from './TradingChart'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
+const LAST_DAY_OPTIONS = [1, 3, 7, 14, 30] as const
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5]
 
 type SizingMode = 'qty' | 'percent'
@@ -69,15 +70,18 @@ export default function Dashboard() {
     symbol,
     setSymbol,
     interval,
-    setInterval,
+    changeInterval,
     sessionStartDate,
     playing,
     speed,
     sessionLocked,
     error,
+    loadWarning,
     tradeMessage,
     setTradeMessage,
     loading,
+    lastDays,
+    setLastDays,
     startingBalance,
     setStartingBalance,
     lots,
@@ -97,6 +101,7 @@ export default function Dashboard() {
     candles,
     playhead,
     handleLoad,
+    handleRefresh,
     handleSessionStartDateChange,
     handlePlay,
     handlePause,
@@ -291,8 +296,10 @@ export default function Dashboard() {
       <header className="dashboard-header">
         <h1>TradingTutor</h1>
         <p>
-          Load historical ByBit spot candles before a sim session (up to 1000
-          bars per load until file ingest).
+          Load a date range of ByBit spot candles (local pack first, or refresh
+          from the exchange). After load you can switch chart timeframe during
+          play — lower TFs are downloaded on demand and may not reach as far
+          back as higher ones.
         </p>
         {sessionLocked ? (
           <Link className="diary-cta" to="/diary">
@@ -320,13 +327,29 @@ export default function Dashboard() {
         </label>
 
         <label>
-          Interval
+          Chart interval
           <select
             value={interval}
-            onChange={(e) => setInterval(e.target.value)}
-            disabled={sessionLocked || loading}
+            onChange={(e) => changeInterval(e.target.value)}
+            disabled={loading}
+            aria-label="Chart interval"
           >
             {INTERVALS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Last N days
+          <select
+            value={lastDays}
+            onChange={(e) => setLastDays(Number(e.target.value))}
+            disabled={sessionLocked || loading}
+          >
+            {LAST_DAY_OPTIONS.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -337,6 +360,22 @@ export default function Dashboard() {
         <button type="submit" disabled={loading || sessionLocked}>
           {loading ? 'Loading…' : sessionLocked ? 'Load locked' : 'Load'}
         </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            void handleRefresh()
+          }}
+          disabled={loading || sessionLocked}
+        >
+          {sessionLocked ? 'Refresh locked' : 'Refresh from exchange'}
+        </button>
+
+        <p className="load-form-hint">
+          Tip: stay on a higher TF, then switch lower to refine an entry. If the
+          lower TF has no history at the current play time, the switch is
+          blocked with an explanation.
+        </p>
       </form>
 
       <div className="playback-controls" role="group" aria-label="Playback controls">
@@ -756,6 +795,19 @@ export default function Dashboard() {
       {error ? (
         <p className="status status-error" role="alert">
           {error}
+        </p>
+      ) : null}
+
+      {loadWarning ? (
+        <p
+          className={
+            loadWarning.includes('Warning:')
+              ? 'status status-warning'
+              : 'status status-info'
+          }
+          role="status"
+        >
+          {loadWarning}
         </p>
       ) : null}
 

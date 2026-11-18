@@ -187,4 +187,15 @@ describe('buildTradeMarkers', () => {
     expect(exits).toHaveLength(2)
     expect(exits.every((m) => m.time === toUtcTimestamp(T2))).toBe(true)
   })
+
+  it('snaps a lower-TF fill time onto the containing higher-TF candle', () => {
+    const intraBar = '2024-06-01T01:17:00.000Z'
+    const markers = buildTradeMarkers(
+      [],
+      [openLot({ id: 'l5', side: 'long', entryTime: intraBar })],
+      visible,
+    )
+    expect(markers).toHaveLength(1)
+    expect(markers[0]?.time).toBe(toUtcTimestamp(T1))
+  })
 })

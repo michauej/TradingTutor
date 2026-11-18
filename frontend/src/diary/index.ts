@@ -9,3 +9,4 @@ export {
   type TradeSpanLine,
 } from './buildTradeSpans'
 export { toUtcTimestamp } from './toUtcTimestamp'
+export { snapToCandleTimestamp } from './snapToCandle'
