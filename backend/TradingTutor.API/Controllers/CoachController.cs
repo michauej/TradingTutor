@@ -33,7 +33,11 @@ public class CoachController : ControllerBase
 
         try
         {
-            var result = await _analyzeService.AnalyzeAsync(request.ClosedTrades, cancellationToken);
+            var result = await _analyzeService.AnalyzeAsync(
+                request.ClosedTrades,
+                request.RulePackId,
+                request.Candles,
+                cancellationToken);
             return Ok(result);
         }
         catch (ArgumentException ex)

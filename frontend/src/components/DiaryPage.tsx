@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react'
 import { Link } from 'react-router-dom'
-import { getAnalyzeGate, mapClosedTradesForCoach } from '../coach'
+import {
+  getAnalyzeGate,
+  mapCandlesForCoach,
+  mapClosedTradesForCoach,
+  toCritiqueCard,
+} from '../coach'
 import {
   BUY_MARKER_COLOR,
   SELL_MARKER_COLOR,
@@ -11,8 +22,13 @@ import {
   ApiError,
   fetchCoachAnalyze,
   type CoachAnalyzeResult,
+  type CoachRulePackId,
 } from '../services/api'
 import { useSession } from '../session'
+import {
+  buildCausalStructureOverlays,
+  mergeMarkersByTime,
+} from '../structure'
 import type { ClosedTrade, Lot, Side } from '../trading'
 import TradingChart from './TradingChart'
 
@@ -159,10 +175,18 @@ export default function DiaryPage() {
   } = useSession()
 
   const [filters, setFilters] = useState<DiaryFilters>(EMPTY_FILTERS)
+  const [rulePackId, setRulePackId] = useState<CoachRulePackId>('hygiene')
+  const [showFvg, setShowFvg] = useState(true)
+  const [showSwings, setShowSwings] = useState(true)
+  const [showExtremeOb, setShowExtremeOb] = useState(true)
+  /** When set, chart + closed-trades list show only these finding-related trades. */
+  const [focusedTradeIds, setFocusedTradeIds] = useState<string[] | null>(null)
+  const [focusedFindingId, setFocusedFindingId] = useState<string | null>(null)
   const [coachState, setCoachState] = useState<CoachPanelState>({
     status: 'idle',
   })
   const coachAbortRef = useRef<AbortController | null>(null)
+  const closedTradesSectionRef = useRef<HTMLElement | null>(null)
 
   // Pause once on diary entry; do not auto-resume when returning to sim.
   useEffect(() => {
@@ -186,17 +210,71 @@ export default function DiaryPage() {
     [lots, filters],
   )
 
-  const markers = useMemo(
-    () => buildTradeMarkers(filteredClosed, filteredLots, visibleCandles),
-    [filteredClosed, filteredLots, visibleCandles],
+  const focusIdSet = useMemo(
+    () => (focusedTradeIds ? new Set(focusedTradeIds) : null),
+    [focusedTradeIds],
   )
-  const tradeSpans = useMemo(
-    () => buildTradeSpans(filteredClosed, visibleCandles),
-    [filteredClosed, visibleCandles],
+  const displayedClosed = useMemo(() => {
+    if (!focusIdSet) {
+      return filteredClosed
+    }
+    return filteredClosed.filter((t) => focusIdSet.has(t.id))
+  }, [filteredClosed, focusIdSet])
+  // Hide open lots while focusing critique trades — markers stay on related closes only.
+  const displayedLots = useMemo(
+    () => (focusIdSet ? [] : filteredLots),
+    [focusIdSet, filteredLots],
   )
 
+  const tradeMarkers = useMemo(
+    () => buildTradeMarkers(displayedClosed, displayedLots, visibleCandles),
+    [displayedClosed, displayedLots, visibleCandles],
+  )
+  // Diary uses the same revealed prefix as play — never the full series.
+  const structureOverlays = useMemo(
+    () =>
+      buildCausalStructureOverlays(visibleCandles, {
+        showFvg,
+        showSwings,
+        showExtremeOb,
+      }),
+    [visibleCandles, showFvg, showSwings, showExtremeOb],
+  )
+  const markers = useMemo(
+    () =>
+      mergeMarkersByTime(tradeMarkers, structureOverlays.swingMarkers),
+    [tradeMarkers, structureOverlays.swingMarkers],
+  )
+  const tradeSpans = useMemo(
+    () => buildTradeSpans(displayedClosed, visibleCandles),
+    [displayedClosed, visibleCandles],
+  )
+
+  function clearTradeFocus() {
+    setFocusedTradeIds(null)
+    setFocusedFindingId(null)
+  }
+
+  function showRelatedTrades(findingId: string, tradeIds: string[]) {
+    setFocusedFindingId(findingId)
+    setFocusedTradeIds(tradeIds)
+    // Scroll table into view so the filtered rows are obvious.
+    requestAnimationFrame(() => {
+      closedTradesSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+    })
+  }
+  const priceRectangles = structureOverlays.priceRectangles
+
   const analyzeGate = getAnalyzeGate(closedTrades.length)
-  const canAnalyze = sessionLocked && analyzeGate.canAnalyze
+  const ictNeedsCandles = rulePackId === 'ict' && visibleCandles.length === 0
+  const canAnalyze =
+    sessionLocked && analyzeGate.canAnalyze && !ictNeedsCandles
+  const analyzeHint = ictNeedsCandles
+    ? 'ICT pack needs session candles — load and play a session first.'
+    : analyzeGate.hint
 
   const filtersActive =
     filters.side !== 'all' ||
@@ -214,10 +292,17 @@ export default function DiaryPage() {
     const controller = new AbortController()
     coachAbortRef.current = controller
     setCoachState({ status: 'loading' })
+    clearTradeFocus()
 
     try {
+      const preferTimes = closedTrades.flatMap((t) => [t.entryTime, t.exitTime])
       const result = await fetchCoachAnalyze({
         closedTrades: mapClosedTradesForCoach(closedTrades),
+        rulePackId,
+        candles:
+          rulePackId === 'ict'
+            ? mapCandlesForCoach(visibleCandles, { preferTimes })
+            : undefined,
         signal: controller.signal,
       })
       setCoachState({ status: 'success', result })
@@ -375,43 +460,85 @@ export default function DiaryPage() {
         </button>
       </form>
 
+      <div className="structure-overlay-toggles" aria-label="Structure overlays">
+        <label>
+          <input
+            type="checkbox"
+            checked={showFvg}
+            onChange={(e) => setShowFvg(e.target.checked)}
+          />
+          Show FVG
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={showSwings}
+            onChange={(e) => setShowSwings(e.target.checked)}
+          />
+          Show swings
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={showExtremeOb}
+            onChange={(e) => setShowExtremeOb(e.target.checked)}
+          />
+          Show extreme OB
+        </label>
+      </div>
+
       <p className="diary-summary" aria-live="polite">
         {closedTrades.length === 0 && lots.length === 0
           ? 'No closed trades or open lots yet — chart shows the revealed session prefix.'
-          : filtersActive
-            ? `Showing ${filteredClosed.length}/${closedTrades.length} closed, ${filteredLots.length}/${lots.length} open · ${markers.length} marker(s).`
-            : `${closedTrades.length} closed trade(s), ${lots.length} open lot(s), ${markers.length} marker(s) on chart.`}
+          : focusIdSet
+            ? `Focusing ${displayedClosed.length} critique trade(s) · ${markers.length} marker(s) on chart.`
+            : filtersActive
+              ? `Showing ${filteredClosed.length}/${closedTrades.length} closed, ${filteredLots.length}/${lots.length} open · ${markers.length} marker(s).`
+              : `${closedTrades.length} closed trade(s), ${lots.length} open lot(s), ${markers.length} marker(s) on chart.`}
       </p>
 
       <TradingChart
         candles={visibleCandles}
         markers={markers}
         tradeSpans={tradeSpans}
+        priceRectangles={priceRectangles}
       />
 
       <CoachAnalyzePanel
         canAnalyze={canAnalyze}
-        hint={analyzeGate.hint}
+        hint={analyzeHint}
+        rulePackId={rulePackId}
+        onRulePackChange={setRulePackId}
         state={coachState}
+        focusedFindingId={focusedFindingId}
+        onShowRelatedTrades={showRelatedTrades}
+        onClearTradeFocus={clearTradeFocus}
         onAnalyze={() => {
           void runAnalyze()
         }}
       />
 
       <ClosedTradesList
-        trades={filteredClosed}
+        sectionRef={closedTradesSectionRef}
+        trades={displayedClosed}
+        focused={Boolean(focusIdSet)}
+        onClearFocus={clearTradeFocus}
         emptyLabel={
           closedTrades.length === 0
             ? 'No closed trades yet.'
-            : 'No closed trades match the filters.'
+            : focusIdSet
+              ? 'No closed trades match this critique focus.'
+              : 'No closed trades match the filters.'
         }
       />
       <OpenLotsList
-        lots={filteredLots}
+        lots={displayedLots}
         emptyLabel={
-          lots.length === 0
-            ? 'No open lots.'
-            : 'No open lots match the filters.'
+          focusIdSet
+            ? 'Open lots hidden while focusing critique trades.'
+            : lots.length === 0
+              ? 'No open lots.'
+              : 'No open lots match the filters.'
         }
       />
     </div>
@@ -421,20 +548,47 @@ export default function DiaryPage() {
 function CoachAnalyzePanel({
   canAnalyze,
   hint,
+  rulePackId,
+  onRulePackChange,
   state,
+  focusedFindingId,
+  onShowRelatedTrades,
+  onClearTradeFocus,
   onAnalyze,
 }: {
   canAnalyze: boolean
   hint: string
+  rulePackId: CoachRulePackId
+  onRulePackChange: (id: CoachRulePackId) => void
   state: CoachPanelState
+  focusedFindingId: string | null
+  onShowRelatedTrades: (findingId: string, tradeIds: string[]) => void
+  onClearTradeFocus: () => void
   onAnalyze: () => void
 }) {
   const loading = state.status === 'loading'
+  const critiqueCards =
+    state.status === 'success'
+      ? state.result.findings.map(toCritiqueCard)
+      : []
 
   return (
     <section className="diary-coach diary-trades" aria-label="AI coach analysis">
       <h2>AI Verdict / Analysis</h2>
       <div className="diary-coach-actions">
+        <label className="diary-coach-pack">
+          Rule pack
+          <select
+            value={rulePackId}
+            onChange={(e) =>
+              onRulePackChange(e.target.value as CoachRulePackId)
+            }
+            disabled={loading}
+          >
+            <option value="hygiene">Hygiene</option>
+            <option value="ict">ICT</option>
+          </select>
+        </label>
         <button
           type="button"
           className="diary-coach-analyze"
@@ -479,20 +633,76 @@ function CoachAnalyzePanel({
             <p className="diary-coach-analysis">{state.result.analysis}</p>
           </div>
           <div className="diary-coach-block">
-            <h3>Rule findings</h3>
-            {state.result.findings.length === 0 ? (
-              <p className="empty-hint">No rule findings for this batch.</p>
+            <div className="diary-coach-critique-header">
+              <h3>Critique</h3>
+              {focusedFindingId ? (
+                <button
+                  type="button"
+                  className="diary-coach-show-trades diary-coach-show-trades-clear"
+                  onClick={onClearTradeFocus}
+                >
+                  Show all trades
+                </button>
+              ) : null}
+            </div>
+            {critiqueCards.length === 0 ? (
+              <p className="empty-hint">No critique findings for this batch.</p>
             ) : (
-              <ul className="diary-coach-findings">
-                {state.result.findings.map((finding) => (
-                  <li key={finding.id}>
-                    <span className="diary-coach-finding-id">{finding.id}</span>
-                    <span className="diary-coach-finding-sev">
-                      {finding.severity}
-                    </span>
-                    <span>{finding.message}</span>
-                  </li>
-                ))}
+              <ul className="diary-coach-critique">
+                {critiqueCards.map((card) => {
+                  const isFocused = focusedFindingId === card.id
+                  const canShow = card.relatedTradeIds.length > 0
+                  return (
+                    <li
+                      key={card.id}
+                      className={
+                        isFocused
+                          ? 'diary-coach-critique-card diary-coach-critique-card-focused'
+                          : 'diary-coach-critique-card'
+                      }
+                    >
+                      <div className="diary-coach-critique-meta">
+                        <span className="diary-coach-finding-id">{card.id}</span>
+                        <span className="diary-coach-finding-sev">
+                          {card.severity}
+                        </span>
+                        {card.biasLabel ? (
+                          <span className="diary-coach-bias">
+                            {card.biasLabel}
+                          </span>
+                        ) : null}
+                        {canShow ? (
+                          <button
+                            type="button"
+                            className="diary-coach-show-trades"
+                            aria-pressed={isFocused}
+                            onClick={() => {
+                              if (isFocused) {
+                                onClearTradeFocus()
+                              } else {
+                                onShowRelatedTrades(
+                                  card.id,
+                                  card.relatedTradeIds,
+                                )
+                              }
+                            }}
+                          >
+                            {isFocused ? 'Hide focus' : 'Show trades'}
+                          </button>
+                        ) : null}
+                      </div>
+                      <p>
+                        <strong>Bad</strong> — {card.bad}
+                      </p>
+                      <p>
+                        <strong>Why</strong> — {card.why}
+                      </p>
+                      <p>
+                        <strong>Better</strong> — {card.better}
+                      </p>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -505,13 +715,34 @@ function CoachAnalyzePanel({
 function ClosedTradesList({
   trades,
   emptyLabel,
+  focused,
+  onClearFocus,
+  sectionRef,
 }: {
   trades: ClosedTrade[]
   emptyLabel: string
+  focused?: boolean
+  onClearFocus?: () => void
+  sectionRef?: RefObject<HTMLElement | null>
 }) {
   return (
-    <section className="closed-trades diary-trades" aria-label="Closed trades">
-      <h2>Closed trades</h2>
+    <section
+      ref={sectionRef}
+      className="closed-trades diary-trades"
+      aria-label="Closed trades"
+    >
+      <div className="diary-coach-critique-header">
+        <h2>{focused ? 'Focused closed trades' : 'Closed trades'}</h2>
+        {focused && onClearFocus ? (
+          <button
+            type="button"
+            className="diary-coach-show-trades diary-coach-show-trades-clear"
+            onClick={onClearFocus}
+          >
+            Show all trades
+          </button>
+        ) : null}
+      </div>
       {trades.length === 0 ? (
         <p className="empty-hint">{emptyLabel}</p>
       ) : (
@@ -519,6 +750,7 @@ function ClosedTradesList({
           <table>
             <thead>
               <tr>
+                <th scope="col">Id</th>
                 <th scope="col">Side</th>
                 <th scope="col">Qty</th>
                 <th scope="col">Entry</th>
@@ -537,7 +769,11 @@ function ClosedTradesList({
                   trade.qty,
                 )
                 return (
-                  <tr key={trade.id}>
+                  <tr
+                    key={trade.id}
+                    className={focused ? 'diary-trade-row-focused' : undefined}
+                  >
+                    <td className="diary-coach-finding-id">{trade.id}</td>
                     <td>{trade.side}</td>
                     <td>{formatPrice(trade.qty)}</td>
                     <td>{formatPrice(trade.entryPrice)}</td>

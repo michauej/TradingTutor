@@ -4,6 +4,10 @@ import { buildTradeMarkers, buildTradeSpans } from '../diary'
 import { type PlaybackSpeed } from '../playback'
 import { useSession } from '../session'
 import {
+  buildCausalStructureOverlays,
+  mergeMarkersByTime,
+} from '../structure'
+import {
   qtyFromPercent,
   realizedPnl as calcUnrealizedPnl,
   validateQtyAgainstSoftCap,
@@ -129,10 +133,28 @@ export default function Dashboard() {
   const [tpQtyInput, setTpQtyInput] = useState('0.01')
   const [slPriceInput, setSlPriceInput] = useState('')
   const [slQtyInput, setSlQtyInput] = useState('0.01')
+  // Structure overlays on playback — default off so the ticket chart stays clean.
+  const [showFvg, setShowFvg] = useState(false)
+  const [showSwings, setShowSwings] = useState(false)
+  const [showExtremeOb, setShowExtremeOb] = useState(false)
 
-  const chartMarkers = useMemo(
+  const tradeMarkers = useMemo(
     () => buildTradeMarkers(closedTrades, lots, visibleCandles),
     [closedTrades, lots, visibleCandles],
+  )
+  // Causal only: visibleCandles is sessionStart→playhead (no future bars).
+  const structureOverlays = useMemo(
+    () =>
+      buildCausalStructureOverlays(visibleCandles, {
+        showFvg,
+        showSwings,
+        showExtremeOb,
+      }),
+    [visibleCandles, showFvg, showSwings, showExtremeOb],
+  )
+  const chartMarkers = useMemo(
+    () => mergeMarkersByTime(tradeMarkers, structureOverlays.swingMarkers),
+    [tradeMarkers, structureOverlays.swingMarkers],
   )
   const chartTradeSpans = useMemo(
     () => buildTradeSpans(closedTrades, visibleCandles),
@@ -819,10 +841,41 @@ export default function Dashboard() {
 
       <p className="status status-info">{statusText}</p>
 
+      <div className="structure-overlay-toggles" aria-label="Structure overlays">
+        <label>
+          <input
+            type="checkbox"
+            checked={showFvg}
+            onChange={(e) => setShowFvg(e.target.checked)}
+          />
+          Show FVG
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={showSwings}
+            onChange={(e) => setShowSwings(e.target.checked)}
+          />
+          Show swings
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={showExtremeOb}
+            onChange={(e) => setShowExtremeOb(e.target.checked)}
+          />
+          Show extreme OB
+        </label>
+        <span className="structure-overlay-hint">
+          Uses revealed candles only (no future peek)
+        </span>
+      </div>
+
       <TradingChart
         candles={visibleCandles}
         markers={chartMarkers}
         tradeSpans={chartTradeSpans}
+        priceRectangles={structureOverlays.priceRectangles}
       />
     </div>
   )

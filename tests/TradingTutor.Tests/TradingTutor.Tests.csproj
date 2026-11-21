@@ -24,4 +24,10 @@
     <ProjectReference Include="..\..\backend\TradingTutor.Trading\TradingTutor.Trading.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

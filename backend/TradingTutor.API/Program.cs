@@ -20,7 +20,10 @@ builder.Services.AddScoped<ICandleLoadService, CandleLoadService>();
 
 
 builder.Services.Configure<CoachOptions>(builder.Configuration.GetSection(CoachOptions.SectionName));
-builder.Services.AddSingleton<FixedRulePack>();
+builder.Services.AddSingleton<IRulePack, FixedRulePack>();
+builder.Services.AddSingleton<IRulePack, IctRulePack>();
+builder.Services.AddSingleton<RulePackRegistry>(sp =>
+    new RulePackRegistry(sp.GetServices<IRulePack>()));
 builder.Services.AddSingleton<LectureContextLoader>();
 builder.Services.AddScoped<CoachAnalyzeService>();
 builder.Services.AddHttpClient<ILmStudioClient, LmStudioClient>((sp, client) =>

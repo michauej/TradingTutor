@@ -12,6 +12,10 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { toUtcTimestamp, type TradeSpanLine } from '../diary'
+import {
+  RectangleOverlayPrimitive,
+  type PriceRectangle,
+} from '../plugins/rectangleOverlay'
 import type { MarketData } from '../services/api'
 
 interface TradingChartProps {
@@ -19,6 +23,8 @@ interface TradingChartProps {
   markers?: SeriesMarker<UTCTimestamp>[]
   /** Semi-transparent entry→exit connectors (diary only). */
   tradeSpans?: TradeSpanLine[]
+  /** Optional price/time rectangles (FVG overlays). */
+  priceRectangles?: PriceRectangle[]
 }
 
 interface SeriesSnapshot {
@@ -31,6 +37,7 @@ export default function TradingChart({
   candles,
   markers = [],
   tradeSpans = [],
+  priceRectangles = [],
 }: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -39,6 +46,7 @@ export default function TradingChart({
     setMarkers: (next: SeriesMarker<UTCTimestamp>[]) => void
     detach: () => void
   } | null>(null)
+  const rectPrimitiveRef = useRef<RectangleOverlayPrimitive | null>(null)
   const spanSeriesRef = useRef<ISeriesApi<'Line'>[]>([])
   const snapshotRef = useRef<SeriesSnapshot>({
     length: 0,
@@ -82,16 +90,21 @@ export default function TradingChart({
     })
 
     const markersPlugin = createSeriesMarkers(series, [])
+    const rectPrimitive = new RectangleOverlayPrimitive()
+    series.attachPrimitive(rectPrimitive)
 
     chartRef.current = chart
     seriesRef.current = series
     markersPluginRef.current = markersPlugin
+    rectPrimitiveRef.current = rectPrimitive
 
     return () => {
       for (const spanSeries of spanSeriesRef.current) {
         chart.removeSeries(spanSeries)
       }
       spanSeriesRef.current = []
+      series.detachPrimitive(rectPrimitive)
+      rectPrimitiveRef.current = null
       markersPlugin.detach()
       chart.remove()
       chartRef.current = null
@@ -179,6 +192,10 @@ export default function TradingChart({
   useEffect(() => {
     markersPluginRef.current?.setMarkers(markers)
   }, [markers])
+
+  useEffect(() => {
+    rectPrimitiveRef.current?.setRectangles(priceRectangles)
+  }, [priceRectangles])
 
   useEffect(() => {
     const chart = chartRef.current

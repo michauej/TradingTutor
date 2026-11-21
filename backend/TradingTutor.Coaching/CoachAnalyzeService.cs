@@ -14,25 +14,32 @@ public sealed class CoachAnalyzeService
 {
     public const int MinimumClosedTrades = 5;
 
-    private readonly FixedRulePack _rulePack;
+    private readonly RulePackRegistry _registry;
     private readonly ILmStudioClient _lmClient;
     private readonly LectureContextLoader _lectureLoader;
     private readonly ILogger<CoachAnalyzeService> _logger;
 
     public CoachAnalyzeService(
-        FixedRulePack rulePack,
+        RulePackRegistry registry,
         ILmStudioClient lmClient,
         LectureContextLoader lectureLoader,
         ILogger<CoachAnalyzeService> logger)
     {
-        _rulePack = rulePack;
+        _registry = registry;
         _lmClient = lmClient;
         _lectureLoader = lectureLoader;
         _logger = logger;
     }
 
+    public Task<CoachAnalyzeResponse> AnalyzeAsync(
+        IReadOnlyList<ClosedTradeInput> trades,
+        CancellationToken cancellationToken = default) =>
+        AnalyzeAsync(trades, RulePackRegistry.DefaultPackId, null, cancellationToken);
+
     public async Task<CoachAnalyzeResponse> AnalyzeAsync(
         IReadOnlyList<ClosedTradeInput> trades,
+        string? rulePackId,
+        IReadOnlyList<CandleInput>? candles,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(trades);
@@ -49,21 +56,43 @@ public sealed class CoachAnalyzeService
             ValidateTrade(trade);
         }
 
+        var pack = _registry.Resolve(rulePackId);
+        var payload = CandlePayloadPolicy.Apply(candles, trades);
+        if (!string.IsNullOrEmpty(payload.Note))
+        {
+            _logger.LogInformation("{CandlePolicyNote}", payload.Note);
+        }
+
+        if (string.Equals(pack.PackId, IctRulePack.PackIdValue, StringComparison.OrdinalIgnoreCase)
+            && payload.Candles.Count == 0)
+        {
+            throw new ArgumentException(
+                "ICT rule pack requires a non-empty candles array (session candle prefix).",
+                nameof(candles));
+        }
+
         var sw = Stopwatch.StartNew();
-        var findings = _rulePack.Evaluate(trades);
+        var context = new RuleEvaluationContext
+        {
+            Trades = trades,
+            Candles = payload.Candles.Count > 0 ? payload.Candles : null
+        };
+        var findings = pack.Evaluate(context);
         _logger.LogInformation(
-            "Coach rules produced {FindingCount} finding(s) for {TradeCount} trade(s)",
+            "Coach rules ({RulePackId}) produced {FindingCount} finding(s) for {TradeCount} trade(s)",
+            pack.PackId,
             findings.Count,
             trades.Count);
 
         var lecture = _lectureLoader.Load();
         var userPrompt = CoachPromptBuilder.BuildUserPrompt(trades, findings, lecture);
+        var systemPrompt = CoachPromptBuilder.GetSystemPrompt(pack.PackId);
 
         string assistantText;
         try
         {
             assistantText = await _lmClient.CompleteChatAsync(
-                CoachPromptBuilder.SystemPrompt,
+                systemPrompt,
                 userPrompt,
                 cancellationToken);
         }
@@ -81,17 +110,20 @@ public sealed class CoachAnalyzeService
         var (verdict, analysis) = CoachResponseParser.Parse(assistantText);
         sw.Stop();
         _logger.LogInformation(
-            "Coach analyze succeeded in {ElapsedMs}ms for {TradeCount} trade(s), {FindingCount} finding(s)",
+            "Coach analyze succeeded in {ElapsedMs}ms for {TradeCount} trade(s), {FindingCount} finding(s), pack {RulePackId}",
             sw.ElapsedMilliseconds,
             trades.Count,
-            findings.Count);
+            findings.Count,
+            pack.PackId);
 
         return new CoachAnalyzeResponse
         {
             Findings = findings,
             Verdict = verdict,
             Analysis = analysis,
-            TradeCount = trades.Count
+            TradeCount = trades.Count,
+            RulePackId = pack.PackId,
+            CandlePolicyNote = payload.Note
         };
     }
 

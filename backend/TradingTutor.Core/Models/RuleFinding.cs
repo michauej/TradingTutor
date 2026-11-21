@@ -1,7 +1,7 @@
 namespace TradingTutor.Core.Models;
 
 /// <summary>
-/// Structured finding from the fixed coach rule pack.
+/// Structured finding from a coach rule pack.
 /// </summary>
 public class RuleFinding
 {
@@ -14,4 +14,18 @@ public class RuleFinding
     public string Message { get; set; } = string.Empty;
 
     public IReadOnlyList<string>? RelatedTradeIds { get; set; }
+
+    /// <summary>Qualitative better-alternative text when a numeric zone is not available.</summary>
+    public string? AlternativeSummary { get; set; }
+
+    public decimal? BetterZoneLow { get; set; }
+
+    public decimal? BetterZoneHigh { get; set; }
+
+    public DateTime? BetterZoneStart { get; set; }
+
+    public DateTime? BetterZoneEnd { get; set; }
+
+    /// <summary>Optional cognitive-bias bridge label (e.g. FOMO).</summary>
+    public string? BiasLabel { get; set; }
 }

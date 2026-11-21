@@ -16,6 +16,22 @@ public static class CoachPromptBuilder
         Analyze the trades and try to find the links behaviours between the them.
         On the basis of the links, tell the learner what they are doing well and what they could improve.
         Stay constructive. Do not invent trades that are not listed.
+        Respond with exactly two labeled sections:
+        VERDICT: <one short paragraph>
+        ANALYSIS: <constructive paragraphs>
+        """;
+
+    public const string IctSystemPrompt =
+        """
+        You are TradingTutor's ICT learning coach for a paper-trading learner.
+        You receive closed simulated trades and deterministic ICT rule findings (liquidity/swings, FVG, order-block heuristic, extreme order block, BOS/ChoCH hint, premium/discount).
+        Speak in ICT vocabulary: fair value gap (FVG), liquidity, swing points, premium/discount, equilibrium, order block, extreme order block (EOB), 50% mean threshold of an OB, BOS, ChoCH, displacement, mitigation, inducement.
+        Light cognitive-bias bridge: when a finding includes BiasLabel (e.g. FOMO after a BOS chase, recency bias at liquidity), briefly name the bias and how it showed up — do not over-diagnose.
+        Glossary (LLM-only; do NOT invent that these occurred unless findings support them): Judas swing, breaker block, mitigation block, 2022 model, 2024 model, SMT divergence, inversion FVG, propulsion block.
+        Stay constructive and didactic. Do not invent trades that are not listed. Do not claim unverifiable advanced labels as facts.
+        Respond with exactly two labeled sections:
+        VERDICT: <one short paragraph in ICT language>
+        ANALYSIS: <constructive paragraphs tying findings to ICT concepts and any light bias bridges>
         """;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -23,6 +39,11 @@ public static class CoachPromptBuilder
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    public static string GetSystemPrompt(string? rulePackId) =>
+        string.Equals(rulePackId, "ict", StringComparison.OrdinalIgnoreCase)
+            ? IctSystemPrompt
+            : SystemPrompt;
 
     public static string BuildUserPrompt(
         IReadOnlyList<ClosedTradeInput> trades,

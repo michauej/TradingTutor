@@ -92,6 +92,12 @@ export interface CoachRuleFinding {
   severity: string
   message: string
   relatedTradeIds?: string[] | null
+  alternativeSummary?: string | null
+  betterZoneLow?: number | null
+  betterZoneHigh?: number | null
+  betterZoneStart?: string | null
+  betterZoneEnd?: string | null
+  biasLabel?: string | null
 }
 
 export interface CoachAnalyzeResult {
@@ -99,7 +105,11 @@ export interface CoachAnalyzeResult {
   verdict: string
   analysis: string
   tradeCount: number
+  rulePackId?: string
+  candlePolicyNote?: string | null
 }
+
+export type CoachRulePackId = 'hygiene' | 'ict'
 
 export interface FetchCoachAnalyzeParams {
   closedTrades: Array<{
@@ -112,16 +122,34 @@ export interface FetchCoachAnalyzeParams {
     exitTime: string
     realizedPnl: number
   }>
+  rulePackId?: CoachRulePackId
+  candles?: Array<{
+    timestamp: string
+    open: number
+    high: number
+    low: number
+    close: number
+  }>
   signal?: AbortSignal
 }
 
 export async function fetchCoachAnalyze(
   params: FetchCoachAnalyzeParams,
 ): Promise<CoachAnalyzeResult> {
+  const body: Record<string, unknown> = {
+    closedTrades: params.closedTrades,
+  }
+  if (params.rulePackId) {
+    body.rulePackId = params.rulePackId
+  }
+  if (params.candles) {
+    body.candles = params.candles
+  }
+
   const response = await fetch('/api/coach/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ closedTrades: params.closedTrades }),
+    body: JSON.stringify(body),
     signal: params.signal,
   })
 

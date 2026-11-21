@@ -31,9 +31,12 @@ public class CoachAnalyzeServiceTests
         Trade("5")
     ];
 
+    private static RulePackRegistry CreateRegistry() =>
+        new([new FixedRulePack(), new IctRulePack()]);
+
     private static CoachAnalyzeService CreateService(ILmStudioClient lm) =>
         new(
-            new FixedRulePack(),
+            CreateRegistry(),
             lm,
             new LectureContextLoader(
                 Options.Create(new CoachOptions { PdfFolder = "" }),
@@ -60,9 +63,54 @@ public class CoachAnalyzeServiceTests
         Assert.Equal(5, result.TradeCount);
         Assert.Equal("Solid session", result.Verdict);
         Assert.Equal("Keep sizing consistent.", result.Analysis);
+        Assert.Equal("hygiene", result.RulePackId);
         Assert.NotNull(result.Findings);
         Assert.Contains("TradingTutor", lm.LastSystemPrompt!, StringComparison.Ordinal);
         Assert.Contains("Closed trades", lm.LastUserPrompt!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_UnknownPack_ThrowsArgumentException()
+    {
+        var lm = new FakeLmClient("VERDICT: x\nANALYSIS: y");
+        var service = CreateService(lm);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.AnalyzeAsync(FiveTrades(), "nope", null));
+        Assert.Contains("Unknown rule pack", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, lm.CallCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_IctWithoutCandles_ThrowsArgumentException()
+    {
+        var lm = new FakeLmClient("VERDICT: x\nANALYSIS: y");
+        var service = CreateService(lm);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.AnalyzeAsync(FiveTrades(), "ict", null));
+        Assert.Contains("non-empty candles", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, lm.CallCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_IctWithCandles_ReturnsFindingsIncludingBetterZone()
+    {
+        var lm = new FakeLmClient("VERDICT: ICT session\nANALYSIS: Watch premium entries.");
+        var service = CreateService(lm);
+        var candles = StructureFixture.BuildPremiumDiscountSeries();
+        var trades = StructureFixture.BuildPremiumLongTrades();
+
+        var result = await service.AnalyzeAsync(trades, "ict", candles);
+
+        Assert.Equal("ict", result.RulePackId);
+        var premium = Assert.Single(result.Findings, f => f.Id == "ict-premium-discount");
+        Assert.NotNull(premium.BetterZoneLow);
+        Assert.NotNull(premium.BetterZoneHigh);
+        Assert.NotNull(premium.AlternativeSummary);
+        Assert.Contains(result.Findings, f => f.BetterZoneLow is not null && f.BetterZoneHigh is not null);
+        Assert.Contains("ICT", lm.LastSystemPrompt!, StringComparison.Ordinal);
+        Assert.Contains("FOMO", lm.LastSystemPrompt!, StringComparison.Ordinal);
     }
 
     [Fact]
