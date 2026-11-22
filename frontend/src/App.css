@@ -42,6 +42,90 @@
   color: var(--text-muted);
 }
 
+.dashboard-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.dashboard-header-actions .diary-cta {
+  margin-bottom: 0;
+}
+
+.session-entry-section {
+  margin-bottom: 2rem;
+}
+
+.session-entry-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+  color: var(--text);
+}
+
+.session-primary-action {
+  font-weight: 650;
+}
+
+.session-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.session-list-header h2 {
+  margin: 0;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.session-list-item {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.session-list-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.session-list-item:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.session-list-symbol {
+  font-weight: 650;
+}
+
+.session-list-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.save-message {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
 .diary-page {
   max-width: 64rem;
   margin: 0 auto;

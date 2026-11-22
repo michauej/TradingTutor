@@ -18,6 +18,13 @@ builder.Services.Configure<CandleStorageOptions>(
 builder.Services.AddSingleton<ICandlePackRepository, JsonCandlePackRepository>();
 builder.Services.AddScoped<ICandleLoadService, CandleLoadService>();
 
+builder.Services.Configure<SessionStorageOptions>(
+    builder.Configuration.GetSection(SessionStorageOptions.SectionName));
+// Swap JsonSessionRepository for an Azure Table (or other) ISessionRepository impl later.
+builder.Services.AddSingleton<ISessionRepository, JsonSessionRepository>();
+builder.Services.AddScoped<SessionService>();
+
+
 
 builder.Services.Configure<CoachOptions>(builder.Configuration.GetSection(CoachOptions.SectionName));
 builder.Services.AddSingleton<FixedRulePack>();

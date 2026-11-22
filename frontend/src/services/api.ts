@@ -132,6 +132,107 @@ export async function fetchCoachAnalyze(
   return (await response.json()) as CoachAnalyzeResult
 }
 
+export interface SessionLotDto {
+  id: string
+  side: string
+  qty: number
+  entryPrice: number
+  entryTime: string
+}
+
+export interface SessionOrderDto {
+  id: string
+  side: string
+  intent: string
+  type: string
+  qty: number
+  limitPrice?: number | null
+  createdAt: string
+}
+
+export interface SessionClosedTradeDto {
+  id: string
+  side: string
+  qty: number
+  entryPrice: number
+  entryTime: string
+  exitPrice: number
+  exitTime: string
+  realizedPnl: number
+}
+
+/** Full durable session snapshot (POST/GET /api/sessions). */
+export interface TradingSessionDto {
+  id: string
+  createdAt?: string
+  updatedAt?: string
+  symbol: string
+  exchange: string
+  interval: string
+  rangeStart?: string | null
+  rangeEnd?: string | null
+  sessionStartDate: string
+  playhead: number
+  sessionLocked: boolean
+  startingBalance: number
+  realizedPnl: number
+  lots: SessionLotDto[]
+  pendingOrders: SessionOrderDto[]
+  closedTrades: SessionClosedTradeDto[]
+}
+
+export interface TradingSessionSummaryDto {
+  id: string
+  createdAt: string
+  updatedAt: string
+  symbol: string
+  closedTradeCount: number
+  startingBalance: number
+}
+
+export interface CreateSessionResult {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export async function listSessions(signal?: AbortSignal): Promise<TradingSessionSummaryDto[]> {
+  const response = await fetch('/api/sessions', { signal })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return (await response.json()) as TradingSessionSummaryDto[]
+}
+
+export async function getSession(
+  id: string,
+  signal?: AbortSignal,
+): Promise<TradingSessionDto> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+    signal,
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return (await response.json()) as TradingSessionDto
+}
+
+export async function createSession(
+  session: TradingSessionDto,
+  signal?: AbortSignal,
+): Promise<CreateSessionResult> {
+  const response = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(session),
+    signal,
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return (await response.json()) as CreateSessionResult
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   let detail = `Request failed (${response.status})`
   try {
