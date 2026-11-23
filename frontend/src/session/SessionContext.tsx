@@ -15,7 +15,14 @@ import {
   resolveSessionStartIndex,
   type PlaybackSpeed,
 } from '../playback'
-import { ApiError, fetchCandles, type MarketData } from '../services/api'
+import {
+  ApiError,
+  createSession,
+  fetchCandles,
+  getSession,
+  type MarketData,
+  type TradingSessionDto,
+} from '../services/api'
 import {
   accountBalance,
   cancelOrder,
@@ -32,6 +39,8 @@ import {
   type ClosedTrade,
   type Lot,
   type Order,
+  type OrderIntent,
+  type OrderType,
   type Side,
 } from '../trading'
 import {
@@ -48,8 +57,87 @@ import {
 
 const DEFAULT_STARTING_BALANCE = 10_000
 const DEFAULT_LAST_DAYS = 7
+const DEFAULT_EXCHANGE = 'ByBit'
 
 type LoadRange = { startTime: string; endTime: string }
+
+function newSessionId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `sess-${Date.now().toString(36)}`
+}
+
+function asSide(value: string): Side | null {
+  return value === 'long' || value === 'short' ? value : null
+}
+
+function asOrderIntent(value: string): OrderIntent | null {
+  return value === 'open' || value === 'close' ? value : null
+}
+
+function asOrderType(value: string): OrderType | null {
+  return value === 'market' || value === 'limit' || value === 'stop'
+    ? value
+    : null
+}
+
+function mapImportedLots(raw: TradingSessionDto['lots']): Lot[] {
+  const lots: Lot[] = []
+  for (const item of raw) {
+    const side = asSide(item.side)
+    if (!side) continue
+    lots.push({
+      id: item.id,
+      side,
+      qty: item.qty,
+      entryPrice: item.entryPrice,
+      entryTime: item.entryTime,
+    })
+  }
+  return lots
+}
+
+function mapImportedOrders(raw: TradingSessionDto['pendingOrders']): Order[] {
+  const orders: Order[] = []
+  for (const item of raw) {
+    const side = asSide(item.side)
+    const intent = asOrderIntent(item.intent)
+    const type = asOrderType(item.type)
+    if (!side || !intent || !type) continue
+    orders.push({
+      id: item.id,
+      side,
+      intent,
+      type,
+      qty: item.qty,
+      limitPrice: item.limitPrice ?? undefined,
+      createdAt: item.createdAt,
+    })
+  }
+  return orders
+}
+
+function mapImportedClosedTrades(
+  raw: TradingSessionDto['closedTrades'],
+): ClosedTrade[] {
+  const trades: ClosedTrade[] = []
+  for (const item of raw) {
+    const side = asSide(item.side)
+    if (!side) continue
+    trades.push({
+      id: item.id,
+      side,
+      qty: item.qty,
+      entryPrice: item.entryPrice,
+      entryTime: item.entryTime,
+      exitPrice: item.exitPrice,
+      exitTime: item.exitTime,
+      realizedPnl: item.realizedPnl,
+    })
+  }
+  return trades
+}
 
 function isAbortError(err: unknown): boolean {
   return (
@@ -88,10 +176,14 @@ export interface SessionContextValue {
   playing: boolean
   speed: PlaybackSpeed
   sessionLocked: boolean
+  /** True when a saved session was loaded for Diary review (trading disabled). */
+  isReviewMode: boolean
+  activeSessionId: string | null
   error: string | null
   loadWarning: string | null
   tradeMessage: string | null
   setTradeMessage: (value: string | null) => void
+  saveMessage: string | null
   loading: boolean
   lastDays: number
   setLastDays: (value: number) => void
@@ -117,6 +209,18 @@ export interface SessionContextValue {
   handlePlay: () => void
   handlePause: () => void
   setSpeed: (speed: PlaybackSpeed) => void
+  /** Unlock setup on the entry screen (clears review + active save id). */
+  beginSessionSetup: () => void
+  /** Lock a configured sim and enter live trading (Play still starts playback). */
+  startSession: () => { ok: true } | { ok: false; message: string }
+  /** Persist full snapshot; reuses activeSessionId for overwrite. */
+  saveSession: () => Promise<
+    { ok: true; id: string } | { ok: false; message: string }
+  >
+  /** Load snapshot + candle refs into read-only review state for Diary. */
+  importSessionForReview: (
+    id: string,
+  ) => Promise<{ ok: true } | { ok: false; message: string }>
   openMarketOrder: (params: {
     side: Side
     qty: number
@@ -163,9 +267,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState<PlaybackSpeed>(1)
   const [sessionLocked, setSessionLocked] = useState(false)
+  const [isReviewMode, setIsReviewMode] = useState(false)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadWarning, setLoadWarning] = useState<string | null>(null)
   const [tradeMessage, setTradeMessage] = useState<string | null>(null)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastDays, setLastDays] = useState(DEFAULT_LAST_DAYS)
   const [loadRange, setLoadRange] = useState<LoadRange | null>(null)
@@ -209,7 +316,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const mark = markFromCandles(visibleCandles)
   const balance = accountBalance({ startingBalance, realizedPnl })
   const nets = netSides(lots)
-  const canTrade = sessionLocked && mark != null
+  const canTrade = sessionLocked && !isReviewMode && mark != null
 
   useEffect(() => {
     return () => {
@@ -352,7 +459,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   function handlePlay() {
-    if (!hasCandles || atEnd || playing) {
+    if (!hasCandles || atEnd || playing || isReviewMode) {
       return
     }
     setSessionLocked(true)
@@ -361,6 +468,186 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   function handlePause() {
     setPlaying(false)
+  }
+
+  function beginSessionSetup() {
+    loadAbortRef.current?.abort()
+    intervalSwitchAbortRef.current?.abort()
+    setIsReviewMode(false)
+    setSessionLocked(false)
+    setActiveSessionId(null)
+    setPlaying(false)
+    setSaveMessage(null)
+    setTradeMessage(null)
+    setError(null)
+    setLoadWarning(null)
+    resetTrading()
+  }
+
+  function startSession(): { ok: true } | { ok: false; message: string } {
+    if (!hasCandles) {
+      return { ok: false, message: 'Load candles before starting a session.' }
+    }
+    setIsReviewMode(false)
+    setActiveSessionId(null)
+    setSaveMessage(null)
+    setSessionLocked(true)
+    setPlaying(false)
+    return { ok: true }
+  }
+
+  function buildSnapshot(id: string): TradingSessionDto {
+    return {
+      id,
+      symbol: symbol.trim().toUpperCase(),
+      exchange: DEFAULT_EXCHANGE,
+      interval,
+      rangeStart: loadRange?.startTime ?? null,
+      rangeEnd: loadRange?.endTime ?? null,
+      sessionStartDate,
+      playhead,
+      sessionLocked: true,
+      startingBalance,
+      realizedPnl,
+      lots,
+      pendingOrders,
+      closedTrades,
+    }
+  }
+
+  async function saveSession(): Promise<
+    { ok: true; id: string } | { ok: false; message: string }
+  > {
+    if (!sessionLocked || isReviewMode) {
+      return {
+        ok: false,
+        message: 'Save is only available during a live locked session.',
+      }
+    }
+    if (!loadRange) {
+      return {
+        ok: false,
+        message: 'Cannot save without a candle load range reference.',
+      }
+    }
+
+    const id = activeSessionId ?? newSessionId()
+    setLoading(true)
+    setSaveMessage(null)
+    try {
+      const result = await createSession(buildSnapshot(id))
+      setActiveSessionId(result.id)
+      setSaveMessage(`Session saved (${result.id.slice(0, 8)}…).`)
+      return { ok: true, id: result.id }
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to save session'
+      setSaveMessage(message)
+      return { ok: false, message }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function importSessionForReview(
+    id: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    setLoading(true)
+    setError(null)
+    setLoadWarning(null)
+    setSaveMessage(null)
+    setPlaying(false)
+
+    try {
+      const snapshot = await getSession(id)
+      if (!snapshot.rangeStart || !snapshot.rangeEnd) {
+        return {
+          ok: false,
+          message: 'Saved session is missing candle range references.',
+        }
+      }
+
+      const result = await fetchCandles({
+        symbol: snapshot.symbol.trim().toUpperCase(),
+        interval: snapshot.interval,
+        startTime: snapshot.rangeStart,
+        endTime: snapshot.rangeEnd,
+        refresh: false,
+      })
+
+      if (result.candles.length === 0) {
+        return {
+          ok: false,
+          message:
+            'No candles available for the saved session refs. Load or refresh that pack first.',
+        }
+      }
+
+      const nextLots = mapImportedLots(snapshot.lots ?? [])
+      const nextOrders = mapImportedOrders(snapshot.pendingOrders ?? [])
+      const nextTrades = mapImportedClosedTrades(snapshot.closedTrades ?? [])
+      const nextPnl = snapshot.realizedPnl
+      const nextBalance = snapshot.startingBalance
+      const startDate =
+        snapshot.sessionStartDate ||
+        toDateInputValue(result.candles[0]!.timestamp)
+      const startIndex = resolveSessionStartIndex(result.candles, startDate)
+      const maxPlayhead = result.candles.length
+      const nextPlayhead = Math.min(
+        Math.max(snapshot.playhead, startIndex),
+        maxPlayhead,
+      )
+
+      setSymbol(snapshot.symbol.trim().toUpperCase())
+      setInterval(snapshot.interval)
+      setCandles(result.candles)
+      setSessionStartDate(startDate)
+      setPlayhead(nextPlayhead)
+      setStartingBalance(nextBalance)
+      setLots(nextLots)
+      setPendingOrders(nextOrders)
+      setClosedTrades(nextTrades)
+      setRealizedPnl(nextPnl)
+      setLoadRange({
+        startTime: snapshot.rangeStart,
+        endTime: snapshot.rangeEnd,
+      })
+      setSeriesCache({ [snapshot.interval]: result.candles })
+      setActiveSessionId(snapshot.id)
+      setIsReviewMode(true)
+      setSessionLocked(true)
+      syncTradingRef({
+        lots: nextLots,
+        pendingOrders: nextOrders,
+        closedTrades: nextTrades,
+        realizedPnl: nextPnl,
+        startingBalance: nextBalance,
+      })
+      setLoadWarning(
+        formatCandleLoadStatus({
+          source: result.source,
+          incomplete: result.incomplete,
+          message: result.message,
+          candleCount: result.candles.length,
+        }),
+      )
+      return { ok: true }
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to load session'
+      setError(message)
+      return { ok: false, message }
+    } finally {
+      setLoading(false)
+    }
   }
 
   function availableQty(side: Side): number {
@@ -751,8 +1038,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadCandles(refresh: boolean) {
-    if (sessionLocked) {
+    if (sessionLocked && !isReviewMode) {
       return
+    }
+    // Fresh candle load from entry always leaves review / prior lock behind.
+    if (isReviewMode || sessionLocked) {
+      setIsReviewMode(false)
+      setSessionLocked(false)
+      setActiveSessionId(null)
     }
 
     loadAbortRef.current?.abort()
@@ -838,10 +1131,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     playing,
     speed,
     sessionLocked,
+    isReviewMode,
+    activeSessionId,
     error,
     loadWarning,
     tradeMessage,
     setTradeMessage,
+    saveMessage,
     loading,
     lastDays,
     setLastDays,
@@ -867,6 +1163,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     handlePlay,
     handlePause,
     setSpeed,
+    beginSessionSetup,
+    startSession,
+    saveSession,
+    importSessionForReview,
     openMarketOrder,
     placeOpenLimit,
     marketCloseFifo,

@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { buildTradeMarkers, buildTradeSpans } from '../diary'
 import { type PlaybackSpeed } from '../playback'
 import { useSession } from '../session'
@@ -17,7 +17,6 @@ import {
 import TradingChart from './TradingChart'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
-const LAST_DAY_OPTIONS = [1, 3, 7, 14, 30] as const
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5]
 
 type SizingMode = 'qty' | 'percent'
@@ -72,22 +71,19 @@ export default function Dashboard() {
   const session = useSession()
   const {
     symbol,
-    setSymbol,
     interval,
     changeInterval,
-    sessionStartDate,
     playing,
     speed,
     sessionLocked,
+    isReviewMode,
     error,
     loadWarning,
     tradeMessage,
     setTradeMessage,
+    saveMessage,
     loading,
-    lastDays,
-    setLastDays,
     startingBalance,
-    setStartingBalance,
     lots,
     pendingOrders,
     closedTrades,
@@ -100,16 +96,12 @@ export default function Dashboard() {
     balance,
     nets,
     canTrade,
-    dateMin,
-    dateMax,
     candles,
     playhead,
-    handleLoad,
-    handleRefresh,
-    handleSessionStartDateChange,
     handlePlay,
     handlePause,
     setSpeed,
+    saveSession,
     openMarketOrder,
     placeOpenLimit,
     marketCloseFifo,
@@ -160,6 +152,10 @@ export default function Dashboard() {
     () => buildTradeSpans(closedTrades, visibleCandles),
     [closedTrades, visibleCandles],
   )
+
+  if (!sessionLocked || isReviewMode) {
+    return <Navigate to="/" replace />
+  }
 
   function resolveOpenQty():
     | { ok: true; qty: number }
@@ -318,36 +314,21 @@ export default function Dashboard() {
       <header className="dashboard-header">
         <h1>TradingTutor</h1>
         <p>
-          Load a date range of ByBit spot candles (local pack first, or refresh
-          from the exchange). After load you can switch chart timeframe during
-          play — lower TFs are downloaded on demand and may not reach as far
-          back as higher ones.
+          Paper session in progress. Switch chart timeframe during play — lower
+          TFs are downloaded on demand and may not reach as far back as higher
+          ones.
         </p>
-        {sessionLocked ? (
+        <div className="dashboard-header-actions">
+          <Link className="diary-cta" to="/">
+            Session setup
+          </Link>
           <Link className="diary-cta" to="/diary">
             Open Trader&apos;s Diary
           </Link>
-        ) : (
-          <span className="diary-cta diary-cta-disabled" title="Play once to lock the session">
-            Open Trader&apos;s Diary
-          </span>
-        )}
+        </div>
       </header>
 
-      <form className="load-form" onSubmit={handleLoad}>
-        <label>
-          Symbol
-          <input
-            type="text"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            required
-            disabled={sessionLocked || loading}
-          />
-        </label>
-
+      <div className="load-form" role="group" aria-label="Chart timeframe">
         <label>
           Chart interval
           <select
@@ -363,56 +344,14 @@ export default function Dashboard() {
             ))}
           </select>
         </label>
-
-        <label>
-          Last N days
-          <select
-            value={lastDays}
-            onChange={(e) => setLastDays(Number(e.target.value))}
-            disabled={sessionLocked || loading}
-          >
-            {LAST_DAY_OPTIONS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <button type="submit" disabled={loading || sessionLocked}>
-          {loading ? 'Loading…' : sessionLocked ? 'Load locked' : 'Load'}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            void handleRefresh()
-          }}
-          disabled={loading || sessionLocked}
-        >
-          {sessionLocked ? 'Refresh locked' : 'Refresh from exchange'}
-        </button>
-
         <p className="load-form-hint">
           Tip: stay on a higher TF, then switch lower to refine an entry. If the
           lower TF has no history at the current play time, the switch is
           blocked with an explanation.
         </p>
-      </form>
+      </div>
 
       <div className="playback-controls" role="group" aria-label="Playback controls">
-        <label>
-          Session start
-          <input
-            type="date"
-            value={sessionStartDate}
-            min={dateMin}
-            max={dateMax}
-            onChange={(e) => handleSessionStartDateChange(e.target.value)}
-            disabled={!hasCandles || sessionLocked}
-          />
-        </label>
-
         <label>
           Speed
           <select
@@ -449,22 +388,6 @@ export default function Dashboard() {
       </div>
 
       <div className="account-strip" role="group" aria-label="Paper account">
-        <label>
-          Starting balance
-          <input
-            type="number"
-            min={0}
-            step="any"
-            value={startingBalance}
-            onChange={(e) => {
-              const next = Number(e.target.value)
-              if (Number.isFinite(next) && next >= 0) {
-                setStartingBalance(next)
-              }
-            }}
-            disabled={sessionLocked}
-          />
-        </label>
         <p className="account-balance" aria-live="polite">
           Balance:{' '}
           <strong>{formatPrice(balance)}</strong>
@@ -485,6 +408,21 @@ export default function Dashboard() {
             ? `${formatPrice(nets.short.qty)} @ ${formatPrice(nets.short.avgEntry)}`
             : 'flat'}
         </p>
+        <button
+          type="button"
+          onClick={() => {
+            void saveSession()
+          }}
+          disabled={loading}
+          aria-label="Save session"
+        >
+          {loading ? 'Saving…' : 'Save session'}
+        </button>
+        {saveMessage ? (
+          <p className="save-message" aria-live="polite">
+            {saveMessage}
+          </p>
+        ) : null}
       </div>
 
       <form

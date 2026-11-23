@@ -167,12 +167,16 @@ function filterOpenLots(lots: Lot[], filters: DiaryFilters): Lot[] {
 export default function DiaryPage() {
   const {
     sessionLocked,
+    isReviewMode,
     visibleCandles,
     closedTrades,
     lots,
     handlePause,
     playing,
+    error,
   } = useSession()
+
+  const diaryAvailable = sessionLocked || isReviewMode
 
   const [filters, setFilters] = useState<DiaryFilters>(EMPTY_FILTERS)
   const [rulePackId, setRulePackId] = useState<CoachRulePackId>('hygiene')
@@ -271,7 +275,7 @@ export default function DiaryPage() {
   const analyzeGate = getAnalyzeGate(closedTrades.length)
   const ictNeedsCandles = rulePackId === 'ict' && visibleCandles.length === 0
   const canAnalyze =
-    sessionLocked && analyzeGate.canAnalyze && !ictNeedsCandles
+    diaryAvailable && analyzeGate.canAnalyze && !ictNeedsCandles
   const analyzeHint = ictNeedsCandles
     ? 'ICT pack needs session candles — load and play a session first.'
     : analyzeGate.hint
@@ -324,14 +328,14 @@ export default function DiaryPage() {
     }
   }
 
-  if (!sessionLocked) {
+  if (!diaryAvailable) {
     return (
       <div className="diary-page">
         <header className="dashboard-header">
           <h1>Trader&apos;s Diary</h1>
-          <p>Lock a session with Play before opening the diary.</p>
+          <p>Start or load a session before opening the diary.</p>
           <Link className="diary-back" to="/">
-            Back to sim
+            Back to session setup
           </Link>
         </header>
       </div>
@@ -343,11 +347,18 @@ export default function DiaryPage() {
       <header className="dashboard-header">
         <h1>Trader&apos;s Diary</h1>
         <p>
-          Review the revealed session chart with economic buy/sell markers.
-          {playing ? ' Pausing playback…' : ' Playback paused.'}
+          {isReviewMode
+            ? 'Read-only review of a saved session. Trading controls stay disabled.'
+            : 'Review the revealed session chart with economic buy/sell markers.'}
+          {!isReviewMode && (playing ? ' Pausing playback…' : ' Playback paused.')}
         </p>
-        <Link className="diary-back" to="/">
-          Back to sim
+        {error ? (
+          <p className="status-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <Link className="diary-back" to={isReviewMode ? '/' : '/trade'}>
+          {isReviewMode ? 'Back to session setup' : 'Back to sim'}
         </Link>
       </header>
 
