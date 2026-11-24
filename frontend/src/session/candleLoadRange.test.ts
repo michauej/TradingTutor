@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   alignDownToInterval,
+  candleRangeFromDates,
   defaultCandleRange,
+  defaultRangeDates,
+  earliestFromDateForInterval,
   formatCandleLoadStatus,
+  MAX_BARS_PER_LOAD,
 } from './candleLoadRange'
 
 describe('defaultCandleRange', () => {
@@ -12,6 +16,67 @@ describe('defaultCandleRange', () => {
 
     expect(range.endTime).toBe('2024-11-08T15:00:00.000Z')
     expect(range.startTime).toBe('2024-11-01T15:00:00.000Z')
+  })
+})
+
+describe('defaultRangeDates', () => {
+  it('returns UTC calendar From/To for last N days', () => {
+    const now = new Date('2024-11-08T15:37:12.000Z')
+    const range = defaultRangeDates({ lastDays: 90, now })
+    expect(range.endDate).toBe('2024-11-08')
+    expect(range.startDate).toBe('2024-08-10')
+  })
+})
+
+describe('earliestFromDateForInterval', () => {
+  it('sets From so ~MaxBars 1d candles fit before To', () => {
+    const from = earliestFromDateForInterval({
+      endDate: '2024-11-08',
+      interval: '1d',
+      maxBars: 100,
+    })
+    expect(from).toBe('2024-08-01')
+  })
+
+  it('uses MaxBarsPerLoad by default for 1h', () => {
+    const from = earliestFromDateForInterval({
+      endDate: '2024-11-08',
+      interval: '1h',
+    })
+    expect(from).not.toBeNull()
+    // ~10000 hours ≈ 416 days before end-of-day 2024-11-08
+    expect(from).toBe(
+      earliestFromDateForInterval({
+        endDate: '2024-11-08',
+        interval: '1h',
+        maxBars: MAX_BARS_PER_LOAD,
+      }),
+    )
+  })
+})
+
+describe('candleRangeFromDates', () => {
+  it('builds an aligned ISO range from date inputs', () => {
+    const range = candleRangeFromDates({
+      startDate: '2024-01-01',
+      endDate: '2024-06-30',
+      interval: '1d',
+    })
+    expect(range.ok).toBe(true)
+    if (!range.ok) {
+      return
+    }
+    expect(range.startTime).toBe('2024-01-01T00:00:00.000Z')
+    expect(range.endTime).toBe('2024-06-30T00:00:00.000Z')
+  })
+
+  it('rejects inverted dates', () => {
+    const range = candleRangeFromDates({
+      startDate: '2024-06-30',
+      endDate: '2024-01-01',
+      interval: '1d',
+    })
+    expect(range.ok).toBe(false)
   })
 })
 

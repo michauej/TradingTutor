@@ -1,7 +1,8 @@
 .dashboard {
-  max-width: 64rem;
+  max-width: 80rem;
   margin: 0 auto;
-  padding: 2rem 1.25rem 3rem;
+  padding: 0.75rem 1.25rem 1.5rem;
+  box-sizing: border-box;
 }
 
 .dashboard-header h1 {
@@ -15,6 +16,131 @@
 .dashboard-header p {
   margin: 0 0 1rem;
   color: var(--text-muted);
+}
+
+.dashboard-header-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.dashboard-header-compact .dashboard-header-title h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.dashboard-header-compact .dashboard-header-title p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+
+.dashboard-header-compact .dashboard-header-actions {
+  margin-bottom: 0;
+}
+
+.dashboard-topbar {
+  margin-bottom: 0.75rem;
+}
+
+.dashboard-topbar .load-form-hint {
+  margin: 0;
+}
+
+.dashboard-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: 0.75rem 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.dashboard-primary-main {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.dashboard-primary-side {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow: visible;
+}
+
+.dashboard-primary-side .playback-controls,
+.dashboard-primary-side .trade-ticket,
+.dashboard-primary-side .close-controls {
+  margin-bottom: 0;
+}
+
+/* Keep room for TP/SL fields so mode switch does not clip or scroll. */
+.dashboard-primary-side .close-controls {
+  min-height: 9.5rem;
+  align-content: flex-start;
+}
+
+.dashboard-primary-chart {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-primary-chart .chart-panel {
+  margin-top: 0;
+}
+
+.dashboard-primary-chart .chart-container {
+  height: min(32rem, calc(100vh - 14rem));
+  min-height: 18rem;
+}
+
+.dashboard-primary-main .open-trades {
+  margin-bottom: 0;
+}
+
+.dashboard-secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.dashboard-secondary .account-strip,
+.dashboard-secondary .pending-orders,
+.dashboard-secondary .closed-trades,
+.dashboard-secondary .structure-overlay-toggles {
+  margin-bottom: 0;
+}
+
+.dashboard-secondary .status {
+  margin: 0;
+}
+
+@media (max-width: 56rem) {
+  .dashboard-primary {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-primary-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .dashboard-primary-side {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .dashboard-primary-chart .chart-container {
+    height: min(28rem, 50vh);
+  }
 }
 
 .diary-cta,
@@ -406,6 +532,20 @@
   color: var(--text-muted);
 }
 
+.load-form-row-start {
+  flex: 0 0 auto;
+  flex-basis: 100%;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.load-form input[type='date'] {
+  min-width: 0;
+  width: 10.5rem;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .playback-controls {
   display: flex;
   flex-wrap: wrap;
@@ -480,10 +620,7 @@
 
 .account-strip label,
 .trade-ticket label,
-.close-controls label,
-.close-market-form label,
-.close-limit-form label,
-.close-stop-form label {
+.close-controls label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -496,10 +633,7 @@
 .trade-ticket input,
 .trade-ticket select,
 .close-controls input,
-.close-controls select,
-.close-market-form input,
-.close-limit-form input,
-.close-stop-form input {
+.close-controls select {
   min-width: 8rem;
   padding: 0.5rem 0.65rem;
   border: 1px solid var(--border);
@@ -513,10 +647,7 @@
 .trade-ticket input:focus,
 .trade-ticket select:focus,
 .close-controls input:focus,
-.close-controls select:focus,
-.close-market-form input:focus,
-.close-limit-form input:focus,
-.close-stop-form input:focus {
+.close-controls select:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -525,19 +656,12 @@
 .trade-ticket input:disabled,
 .trade-ticket select:disabled,
 .close-controls input:disabled,
-.close-controls select:disabled,
-.close-market-form input:disabled,
-.close-limit-form input:disabled,
-.close-stop-form input:disabled {
+.close-controls select:disabled {
   opacity: 0.65;
   cursor: not-allowed;
 }
 
-.trade-ticket button,
 .close-controls button,
-.close-market-form button,
-.close-limit-form button,
-.close-stop-form button,
 .pending-orders button {
   padding: 0.55rem 1.1rem;
   border: none;
@@ -549,21 +673,53 @@
   cursor: pointer;
 }
 
-.trade-ticket button:hover:not(:disabled),
 .close-controls button:hover:not(:disabled),
-.close-market-form button:hover:not(:disabled),
-.close-limit-form button:hover:not(:disabled),
-.close-stop-form button:hover:not(:disabled),
 .pending-orders button:hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
-.trade-ticket button:disabled,
-.close-controls button:disabled,
-.close-market-form button:disabled,
-.close-limit-form button:disabled,
-.close-stop-form button:disabled {
+.close-controls button:disabled {
   opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.ticket-side-actions {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.ticket-buy,
+.ticket-sell {
+  padding: 0.65rem 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}
+
+.ticket-buy {
+  background: #16a34a;
+}
+
+.ticket-buy:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.ticket-sell {
+  background: #dc2626;
+}
+
+.ticket-sell:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.ticket-buy:disabled,
+.ticket-sell:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
@@ -583,15 +739,6 @@
 .account-balance-detail {
   color: var(--text-muted);
   font-weight: 400;
-}
-
-.close-market-form,
-.close-limit-form,
-.close-stop-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
-  align-items: flex-end;
 }
 
 .pending-orders,

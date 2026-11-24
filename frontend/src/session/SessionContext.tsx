@@ -44,7 +44,8 @@ import {
   type Side,
 } from '../trading'
 import {
-  defaultCandleRange,
+  candleRangeFromDates,
+  defaultRangeDates,
   formatCandleLoadStatus,
 } from './candleLoadRange'
 import {
@@ -56,7 +57,7 @@ import {
 } from './intervalSwitch'
 
 const DEFAULT_STARTING_BALANCE = 10_000
-const DEFAULT_LAST_DAYS = 7
+const DEFAULT_RANGE_DATES = defaultRangeDates({ lastDays: 90 })
 const DEFAULT_EXCHANGE = 'ByBit'
 
 type LoadRange = { startTime: string; endTime: string }
@@ -185,8 +186,12 @@ export interface SessionContextValue {
   setTradeMessage: (value: string | null) => void
   saveMessage: string | null
   loading: boolean
-  lastDays: number
-  setLastDays: (value: number) => void
+  /** Candle load window — From date (`YYYY-MM-DD`). */
+  rangeStartDate: string
+  setRangeStartDate: (value: string) => void
+  /** Candle load window — To date (`YYYY-MM-DD`). */
+  rangeEndDate: string
+  setRangeEndDate: (value: string) => void
   startingBalance: number
   setStartingBalance: (value: number) => void
   lots: Lot[]
@@ -274,7 +279,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [tradeMessage, setTradeMessage] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [lastDays, setLastDays] = useState(DEFAULT_LAST_DAYS)
+  const [rangeStartDate, setRangeStartDate] = useState(
+    DEFAULT_RANGE_DATES.startDate,
+  )
+  const [rangeEndDate, setRangeEndDate] = useState(DEFAULT_RANGE_DATES.endDate)
   const [loadRange, setLoadRange] = useState<LoadRange | null>(null)
   const [seriesCache, setSeriesCache] = useState<Record<string, MarketData[]>>(
     {},
@@ -1056,7 +1064,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setError(null)
     setLoadWarning(null)
 
-    const range = defaultCandleRange({ lastDays, interval })
+    const range = candleRangeFromDates({
+      startDate: rangeStartDate,
+      endDate: rangeEndDate,
+      interval,
+    })
+    if (!range.ok) {
+      setError(range.message)
+      setLoading(false)
+      return
+    }
 
     try {
       const result = await fetchCandles({
@@ -1075,7 +1092,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       const defaultStart = toDateInputValue(result.candles[0]!.timestamp)
       resetSessionFromCandles(result.candles, defaultStart)
-      setLoadRange(range)
+      setLoadRange({
+        startTime: range.startTime,
+        endTime: range.endTime,
+      })
       setSeriesCache({ [interval]: result.candles })
       setLoadWarning(
         formatCandleLoadStatus({
@@ -1139,8 +1159,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setTradeMessage,
     saveMessage,
     loading,
-    lastDays,
-    setLastDays,
+    rangeStartDate,
+    setRangeStartDate,
+    rangeEndDate,
+    setRangeEndDate,
     startingBalance,
     setStartingBalance,
     lots,

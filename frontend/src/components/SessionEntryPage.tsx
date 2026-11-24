@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useSession } from '../session'
+import { earliestFromDateForInterval, useSession } from '../session'
 import {
   ApiError,
   listSessions,
@@ -8,7 +8,6 @@ import {
 } from '../services/api'
 
 const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
-const LAST_DAY_OPTIONS = [1, 3, 7, 14, 30] as const
 
 function formatWhen(iso: string): string {
   const ms = Date.parse(iso)
@@ -29,15 +28,16 @@ export default function SessionEntryPage() {
     error,
     loadWarning,
     loading,
-    lastDays,
-    setLastDays,
+    rangeStartDate,
+    setRangeStartDate,
+    rangeEndDate,
+    setRangeEndDate,
     startingBalance,
     setStartingBalance,
     hasCandles,
     dateMin,
     dateMax,
     handleLoad,
-    handleRefresh,
     handleSessionStartDateChange,
     beginSessionSetup,
     startSession,
@@ -145,18 +145,29 @@ export default function SessionEntryPage() {
           </label>
 
           <label>
-            Last N days
-            <select
-              value={lastDays}
-              onChange={(e) => setLastDays(Number(e.target.value))}
+            From date
+            <input
+              type="date"
+              value={rangeStartDate}
+              max={rangeEndDate || undefined}
+              onChange={(e) => setRangeStartDate(e.target.value)}
               disabled={loading}
-            >
-              {LAST_DAY_OPTIONS.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
+              required
+              aria-label="Candle range from date"
+            />
+          </label>
+
+          <label>
+            To date
+            <input
+              type="date"
+              value={rangeEndDate}
+              min={rangeStartDate || undefined}
+              onChange={(e) => setRangeEndDate(e.target.value)}
+              disabled={loading}
+              required
+              aria-label="Candle range to date"
+            />
           </label>
 
           <button type="submit" disabled={loading}>
@@ -166,14 +177,21 @@ export default function SessionEntryPage() {
           <button
             type="button"
             onClick={() => {
-              void handleRefresh()
+              const earliest = earliestFromDateForInterval({
+                endDate: rangeEndDate,
+                interval,
+              })
+              if (earliest) {
+                setRangeStartDate(earliest)
+              }
             }}
-            disabled={loading}
+            disabled={loading || !rangeEndDate}
+            aria-label="Set earliest From date for interval"
           >
-            Refresh from exchange
+            Earliest From
           </button>
 
-          <label>
+          <label className="load-form-row-start">
             Session start
             <input
               type="date"
@@ -184,6 +202,11 @@ export default function SessionEntryPage() {
               disabled={!hasCandles || loading}
             />
           </label>
+          <p className="load-form-hint">
+            From/To set how much history to download. Earliest From sets From to
+            the oldest date that still fits the ~10 000-bar load cap for the
+            selected interval. Session start sets where playback begins.
+          </p>
 
           <label>
             Starting balance
