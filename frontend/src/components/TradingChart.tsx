@@ -167,6 +167,8 @@ export default function TradingChart({
 
     series.setData(data)
     if (data.length > 0) {
+      // Fit the revealed window (pre-start context → tip) so TF switches keep
+      // HTF history visible. Parent only passes candles up to the sim playhead.
       chart.timeScale().fitContent()
     }
     snapshotRef.current = {

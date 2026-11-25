@@ -86,7 +86,7 @@ public class JsonCandlePackRepositoryTests
     }
 
     private static JsonCandlePackRepository CreateRepository(string root) =>
-        new(Options.Create(new CandleStorageOptions { RootPath = root, MaxBarsPerLoad = 10_000 }));
+        new(Options.Create(new CandleStorageOptions { RootPath = root, PackPageSize = 500 }));
 
     private static string CreateTempRoot()
     {

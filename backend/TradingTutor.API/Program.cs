@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using TradingTutor.API.Serialization;
 using TradingTutor.Coaching;
 using TradingTutor.Coaching.Llm;
 using TradingTutor.Coaching.Rules;
@@ -10,7 +11,13 @@ using TradingTutor.Trading.Storage;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Always emit UTC with `Z` so the FE does not parse bare ISO as local time.
+        options.JsonSerializerOptions.Converters.Add(new UtcDateTimeJsonConverter());
+        options.JsonSerializerOptions.Converters.Add(new UtcNullableDateTimeJsonConverter());
+    });
 builder.Services.AddHttpClient<IExchangeService, ByBitService>();
 
 builder.Services.Configure<CandleStorageOptions>(
@@ -22,12 +29,13 @@ builder.Services.Configure<SessionStorageOptions>(
     builder.Configuration.GetSection(SessionStorageOptions.SectionName));
 // Swap JsonSessionRepository for an Azure Table (or other) ISessionRepository impl later.
 builder.Services.AddSingleton<ISessionRepository, JsonSessionRepository>();
+builder.Services.AddSingleton<SessionCommandLock>();
 builder.Services.AddScoped<SessionService>();
 
 
 
 builder.Services.Configure<CoachOptions>(builder.Configuration.GetSection(CoachOptions.SectionName));
-builder.Services.AddSingleton<FixedRulePack>();
+builder.Services.AddSingleton(RulePack.CreateFixed());
 builder.Services.AddSingleton<LectureContextLoader>();
 builder.Services.AddScoped<CoachAnalyzeService>();
 builder.Services.AddHttpClient<ILmStudioClient, LmStudioClient>((sp, client) =>

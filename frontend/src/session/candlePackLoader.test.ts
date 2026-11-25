@@ -1,0 +1,237 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { PACK_PAGE_SIZE, type MarketData } from '../services/api'
+import {
+  extendPackEndTime,
+  loadFirstPack,
+  loadNextPack,
+  loadPackAroundWatermark,
+  tipWindowPadMs,
+  tipWindowRange,
+  TIP_WINDOW_MIN_BARS,
+  TIP_WINDOW_MIN_DAYS_MS,
+} from './candlePackLoader'
+import { intervalDurationMs } from './intervalSwitch'
+
+vi.mock('../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/api')>()
+  return {
+    ...actual,
+    fetchCandles: vi.fn(),
+  }
+})
+
+import { fetchCandles } from '../services/api'
+
+function bar(iso: string): MarketData {
+  return {
+    symbol: 'BTCUSDT',
+    exchange: 'ByBit',
+    open: 100,
+    high: 110,
+    low: 90,
+    close: 105,
+    volume: 1,
+    timestamp: iso,
+    interval: '1h',
+  }
+}
+
+describe('tipWindowPadMs', () => {
+  it('keeps 2 days for 1m', () => {
+    expect(tipWindowPadMs('1m')).toBe(TIP_WINDOW_MIN_DAYS_MS)
+  })
+
+  it('uses 500 bars for 1h (~21 days)', () => {
+    const expected = TIP_WINDOW_MIN_BARS * intervalDurationMs('1h')
+    expect(tipWindowPadMs('1h')).toBe(expected)
+    expect(expected).toBeGreaterThan(TIP_WINDOW_MIN_DAYS_MS)
+  })
+})
+
+describe('tipWindowRange', () => {
+  it('clamps tip±pad into the load range for 1m', () => {
+    const tip = '2024-10-13T12:00:00.000Z'
+    const pad = tipWindowPadMs('1m')
+    const window = tipWindowRange({
+      watermarkIso: tip,
+      rangeStartIso: '2024-08-25T00:00:00.000Z',
+      rangeEndIso: '2024-11-19T00:00:00.000Z',
+      interval: '1m',
+    })
+    expect(window.ok).toBe(true)
+    if (!window.ok) {
+      return
+    }
+    expect(window.startTime).toBe(new Date(Date.parse(tip) - pad).toISOString())
+    expect(window.endTime).toBe(new Date(Date.parse(tip) + pad).toISOString())
+  })
+
+  it('gives 1h a longer past window than 2 days', () => {
+    const tip = '2024-10-13T12:00:00.000Z'
+    const window = tipWindowRange({
+      watermarkIso: tip,
+      rangeStartIso: '2024-01-01T00:00:00.000Z',
+      rangeEndIso: '2024-11-19T00:00:00.000Z',
+      interval: '1h',
+    })
+    expect(window.ok).toBe(true)
+    if (!window.ok) {
+      return
+    }
+    const pastMs = Date.parse(tip) - Date.parse(window.startTime)
+    expect(pastMs).toBeGreaterThan(TIP_WINDOW_MIN_DAYS_MS)
+    expect(pastMs).toBe(tipWindowPadMs('1h'))
+  })
+
+  it('does not start before the pack range', () => {
+    const window = tipWindowRange({
+      watermarkIso: '2024-08-26T00:00:00.000Z',
+      rangeStartIso: '2024-08-25T00:00:00.000Z',
+      rangeEndIso: '2024-11-19T00:00:00.000Z',
+      interval: '1h',
+    })
+    expect(window.ok).toBe(true)
+    if (!window.ok) {
+      return
+    }
+    expect(window.startTime).toBe('2024-08-25T00:00:00.000Z')
+  })
+})
+
+describe('extendPackEndTime', () => {
+  it('extends toward the session range end', () => {
+    const next = extendPackEndTime(
+      '2024-10-15T12:00:00.000Z',
+      '2024-11-19T00:00:00.000Z',
+      tipWindowPadMs('1h'),
+    )
+    expect(next).toBe(
+      new Date(
+        Date.parse('2024-10-15T12:00:00.000Z') + tipWindowPadMs('1h'),
+      ).toISOString(),
+    )
+  })
+
+  it('returns null at the range end', () => {
+    expect(
+      extendPackEndTime(
+        '2024-11-19T00:00:00.000Z',
+        '2024-11-19T00:00:00.000Z',
+      ),
+    ).toBeNull()
+  })
+})
+
+describe('candlePackLoader', () => {
+  beforeEach(() => {
+    vi.mocked(fetchCandles).mockReset()
+  })
+
+  it('loadFirstPack requests offset 0 with PACK_PAGE_SIZE', async () => {
+    vi.mocked(fetchCandles).mockResolvedValue({
+      candles: [bar('2024-01-01T00:00:00.000Z')],
+      source: 'local',
+      incomplete: false,
+      offset: 0,
+      totalCount: 1200,
+      hasMore: true,
+    })
+
+    const pack = await loadFirstPack({
+      symbol: 'BTCUSDT',
+      interval: '1h',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: '2024-02-01T00:00:00.000Z',
+    })
+
+    expect(fetchCandles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        offset: 0,
+        limit: PACK_PAGE_SIZE,
+      }),
+    )
+    expect(pack.nextOffset).toBe(1)
+    expect(pack.hasMore).toBe(true)
+    expect(pack.startTime).toBe('2024-01-01T00:00:00.000Z')
+  })
+
+  it('loadNextPack appends the next page', async () => {
+    vi.mocked(fetchCandles).mockResolvedValue({
+      candles: [bar('2024-01-01T01:00:00.000Z')],
+      source: 'local',
+      incomplete: false,
+      offset: 1,
+      totalCount: 2,
+      hasMore: false,
+    })
+
+    const next = await loadNextPack({
+      symbol: 'BTCUSDT',
+      interval: '1h',
+      current: {
+        candles: [bar('2024-01-01T00:00:00.000Z')],
+        nextOffset: 1,
+        totalCount: 2,
+        hasMore: true,
+        startTime: '2024-01-01T00:00:00.000Z',
+        endTime: '2024-02-01T00:00:00.000Z',
+      },
+    })
+
+    expect(next.candles).toHaveLength(2)
+    expect(next.nextOffset).toBe(2)
+    expect(next.hasMore).toBe(false)
+  })
+
+  it('loadPackAroundWatermark queries tip±pad, not pack start', async () => {
+    const tip = '2024-10-13T12:00:00.000Z'
+    const pad = tipWindowPadMs('1h')
+    const windowStart = new Date(Date.parse(tip) - pad).toISOString()
+    const windowEnd = new Date(Date.parse(tip) + pad).toISOString()
+
+    vi.mocked(fetchCandles)
+      .mockResolvedValueOnce({
+        candles: [
+          bar('2024-10-11T12:00:00.000Z'),
+          bar('2024-10-12T12:00:00.000Z'),
+        ],
+        source: 'local',
+        incomplete: false,
+        offset: 0,
+        totalCount: 4,
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        candles: [
+          bar('2024-10-13T12:00:00.000Z'),
+          bar('2024-10-14T12:00:00.000Z'),
+        ],
+        source: 'local',
+        incomplete: false,
+        offset: 2,
+        totalCount: 4,
+        hasMore: false,
+      })
+
+    const state = await loadPackAroundWatermark({
+      symbol: 'BTCUSDT',
+      interval: '1h',
+      rangeStartIso: '2024-08-25T00:00:00.000Z',
+      rangeEndIso: '2024-11-19T00:00:00.000Z',
+      watermarkIso: tip,
+    })
+
+    expect(fetchCandles).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        startTime: windowStart,
+        endTime: windowEnd,
+        offset: 0,
+      }),
+    )
+    expect(fetchCandles).toHaveBeenCalledTimes(2)
+    expect(state.startTime).toBe(windowStart)
+    expect(state.candles).toHaveLength(4)
+    expect(state.hasMore).toBe(false)
+  })
+})

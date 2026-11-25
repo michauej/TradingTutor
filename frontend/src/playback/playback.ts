@@ -76,6 +76,17 @@ export type AdvanceResult =
  * Auto-pause consumers should treat `atEnd` as `playing = false` with playhead = length.
  */
 export function advancePlayhead(playhead: number, length: number): AdvanceResult {
+  return advancePlayheadBy(playhead, length, 1)
+}
+
+/**
+ * Advance the exclusive playhead by up to `steps` candles (batched group for one HTTP advance).
+ */
+export function advancePlayheadBy(
+  playhead: number,
+  length: number,
+  steps: number,
+): AdvanceResult {
   if (length <= 0) {
     return { kind: 'atEnd', playhead: 0 }
   }
@@ -83,11 +94,23 @@ export function advancePlayhead(playhead: number, length: number): AdvanceResult
   if (clamped >= length) {
     return { kind: 'atEnd', playhead: length }
   }
-  const next = clamped + 1
+  const step = Math.max(1, Math.floor(steps))
+  const next = Math.min(length, clamped + step)
   if (next >= length) {
     return { kind: 'atEnd', playhead: length }
   }
   return { kind: 'advanced', playhead: next }
+}
+
+/** How many bars to batch into one advance request for a playback speed. */
+export function barsPerTickForSpeed(speed: PlaybackSpeed): number {
+  if (speed >= 5) {
+    return 5
+  }
+  if (speed >= 2) {
+    return 2
+  }
+  return 1
 }
 
 export function isAtEnd(playhead: number, length: number): boolean {

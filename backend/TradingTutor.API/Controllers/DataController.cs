@@ -23,7 +23,10 @@ public class DataController : ControllerBase
         _logger = logger;
     }
 
-    /// <summary>Orchestrated local-first candle load with optional exchange refresh.</summary>
+    /// <summary>
+    /// Orchestrated local-first candle load. Optional <c>offset</c>/<c>limit</c> return a
+    /// progressive pack page (~500) after the full range is ensured on disk.
+    /// </summary>
     [HttpGet("candles")]
     public async Task<IActionResult> GetCandles(
         [FromQuery] string symbol = "BTCUSDT",
@@ -31,6 +34,8 @@ public class DataController : ControllerBase
         [FromQuery] DateTime? startTime = null,
         [FromQuery] DateTime? endTime = null,
         [FromQuery] bool refresh = false,
+        [FromQuery] int? offset = null,
+        [FromQuery] int? limit = null,
         CancellationToken cancellationToken = default)
     {
         if (startTime is null || endTime is null)
@@ -49,6 +54,8 @@ public class DataController : ControllerBase
                 startTime.Value,
                 endTime.Value,
                 refresh,
+                offset,
+                limit,
                 cancellationToken);
 
             return Ok(new CandleLoadResponse
@@ -56,7 +63,10 @@ public class DataController : ControllerBase
                 Candles = result.Candles,
                 Source = result.Source,
                 Incomplete = result.Incomplete,
-                Message = result.Message
+                Message = result.Message,
+                Offset = result.Offset,
+                TotalCount = result.TotalCount,
+                HasMore = result.HasMore
             });
         }
         catch (CandleLoadValidationException ex)
@@ -144,5 +154,8 @@ public class DataController : ControllerBase
         public required string Source { get; init; }
         public required bool Incomplete { get; init; }
         public string? Message { get; init; }
+        public int Offset { get; init; }
+        public int TotalCount { get; init; }
+        public bool HasMore { get; init; }
     }
 }

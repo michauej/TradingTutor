@@ -3,29 +3,28 @@ using TradingTutor.Core.Models;
 namespace TradingTutor.Coaching.Rules;
 
 /// <summary>
-/// Deterministic fixed rule pack (3–5 rules). Empty trade list → empty findings.
+/// Deterministic rule pack. Empty trade list → empty findings.
 /// Findings are concatenated in stable rule registration order; each rule uses a stable id.
 /// </summary>
-public sealed class FixedRulePack
+public sealed class RulePack
 {
     private readonly IReadOnlyList<ICoachRule> _rules;
 
-    public FixedRulePack()
-        : this(
+    public RulePack(IReadOnlyList<ICoachRule> rules)
+    {
+        _rules = rules;
+    }
+
+    /// <summary>Fixed hygiene pack (3–5 journal-only rules).</summary>
+    public static RulePack CreateFixed() =>
+        new(
         [
             new LongAdverseMoveRule(),
             new ShortAdverseMoveRule(),
             new LossClusteringRule(),
             new ShortHoldRule(),
             new LowWinRateRule()
-        ])
-    {
-    }
-
-    public FixedRulePack(IReadOnlyList<ICoachRule> rules)
-    {
-        _rules = rules;
-    }
+        ]);
 
     public IReadOnlyList<RuleFinding> Evaluate(IReadOnlyList<ClosedTradeInput> trades)
     {

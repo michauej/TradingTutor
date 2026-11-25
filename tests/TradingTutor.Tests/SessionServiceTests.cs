@@ -11,7 +11,7 @@ public class SessionServiceTests
     public async Task CreateAsync_UpsertsById()
     {
         var fake = new FakeSessionRepository();
-        var service = new SessionService(fake);
+        var service = CreateService(fake);
         var session = new TradingSession
         {
             Id = "s1",
@@ -35,7 +35,7 @@ public class SessionServiceTests
     [Fact]
     public async Task CreateAsync_MissingId_Throws()
     {
-        var service = new SessionService(new FakeSessionRepository());
+        var service = CreateService(new FakeSessionRepository());
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.CreateAsync(new TradingSession { Symbol = "BTCUSDT" }));
     }
@@ -43,7 +43,7 @@ public class SessionServiceTests
     [Fact]
     public async Task GetAsync_Missing_ReturnsNull()
     {
-        var service = new SessionService(new FakeSessionRepository());
+        var service = CreateService(new FakeSessionRepository());
         Assert.Null(await service.GetAsync("missing"));
     }
 
@@ -52,7 +52,7 @@ public class SessionServiceTests
     {
         var fake = new FakeSessionRepository();
         fake.Store["s1"] = new TradingSession { Id = "s1", Symbol = "ETHUSDT" };
-        var service = new SessionService(fake);
+        var service = CreateService(fake);
 
         var loaded = await service.GetAsync("s1");
         Assert.NotNull(loaded);
@@ -78,7 +78,7 @@ public class SessionServiceTests
             StartingBalance = 2_000m,
             UpdatedAt = DateTime.UtcNow
         };
-        var service = new SessionService(fake);
+        var service = CreateService(fake);
 
         var list = await service.ListAsync();
         Assert.Equal(2, list.Count);
@@ -87,7 +87,10 @@ public class SessionServiceTests
         Assert.Equal(1, list[1].ClosedTradeCount);
     }
 
-    private sealed class FakeSessionRepository : ISessionRepository
+    private static SessionService CreateService(FakeSessionRepository fake) =>
+        new(fake, new FakeCandleLoadService([]));
+
+    internal sealed class FakeSessionRepository : ISessionRepository
     {
         public Dictionary<string, TradingSession> Store { get; } = new(StringComparer.Ordinal);
 
@@ -123,6 +126,67 @@ public class SessionServiceTests
                 })
                 .ToList();
             return Task.FromResult(list);
+        }
+    }
+
+    internal sealed class FakeCandleLoadService : ICandleLoadService
+    {
+        private readonly IReadOnlyList<MarketData> _default;
+        private readonly IReadOnlyDictionary<string, IReadOnlyList<MarketData>> _byInterval;
+
+        public FakeCandleLoadService(IReadOnlyList<MarketData> candles)
+            : this(candles, new Dictionary<string, IReadOnlyList<MarketData>>(StringComparer.OrdinalIgnoreCase))
+        {
+        }
+
+        public FakeCandleLoadService(
+            IReadOnlyList<MarketData> defaultCandles,
+            IReadOnlyDictionary<string, IReadOnlyList<MarketData>> byInterval)
+        {
+            _default = defaultCandles;
+            _byInterval = byInterval;
+        }
+
+        public Task<CandleLoadResult> LoadAsync(
+            string symbol,
+            string interval,
+            DateTime start,
+            DateTime end,
+            bool refresh = false,
+            int? offset = null,
+            int? limit = null,
+            CancellationToken cancellationToken = default)
+        {
+            var candles = _byInterval.TryGetValue(interval, out var specific)
+                ? specific
+                : _default;
+            var list = candles as IReadOnlyList<MarketData> ?? candles.ToList();
+            var total = list.Count;
+            if (offset is not null || limit is not null)
+            {
+                var startIdx = Math.Clamp(offset ?? 0, 0, total);
+                var take = Math.Max(1, limit ?? 500);
+                list = list.Skip(startIdx).Take(take).ToList();
+                return Task.FromResult(new CandleLoadResult
+                {
+                    Candles = list,
+                    Source = "local",
+                    Incomplete = false,
+                    Offset = startIdx,
+                    TotalCount = total,
+                    HasMore = startIdx + list.Count < total
+                });
+            }
+
+            return Task.FromResult(new CandleLoadResult
+            {
+                Candles = list,
+                Source = "local",
+                Incomplete = false,
+                Offset = 0,
+                TotalCount = total,
+                HasMore = false
+            });
         }
     }
 }

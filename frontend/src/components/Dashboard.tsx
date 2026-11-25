@@ -2,7 +2,8 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { buildTradeMarkers, buildTradeSpans } from '../diary'
 import { type PlaybackSpeed } from '../playback'
-import { useSession } from '../session'
+import { parseUtcMillis } from '../diary'
+import { CHART_INTERVALS, useSession } from '../session'
 import {
   qtyFromPercent,
   realizedPnl as calcUnrealizedPnl,
@@ -12,8 +13,15 @@ import {
 } from '../trading'
 import TradingChart from './TradingChart'
 
-const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5]
+
+function formatTradeTime(iso: string): string {
+  const ms = parseUtcMillis(iso)
+  if (ms === null) {
+    return iso
+  }
+  return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')
+}
 
 type SizingMode = 'qty' | 'percent'
 type OrderTicketType = 'market' | 'limit'
@@ -70,6 +78,7 @@ export default function Dashboard() {
     symbol,
     interval,
     changeInterval,
+    playableIntervals,
     playing,
     speed,
     sessionLocked,
@@ -160,115 +169,125 @@ export default function Dashboard() {
 
   /** Exchange-style: Buy/Long and Sell/Short each submit with that side. */
   function handleOpenSide(side: Side) {
-    const sized = resolveOpenQty()
-    if (!sized.ok) {
-      setTradeMessage(sized.message)
-      return
-    }
+    void (async () => {
+      const sized = resolveOpenQty()
+      if (!sized.ok) {
+        setTradeMessage(sized.message)
+        return
+      }
 
-    if (ticketType === 'market') {
-      const opened = openMarketOrder({ side, qty: sized.qty })
-      if (!opened.ok) {
-        setTradeMessage(opened.message)
+      if (ticketType === 'market') {
+        const opened = await openMarketOrder({ side, qty: sized.qty })
+        if (!opened.ok) {
+          setTradeMessage(opened.message)
+          return
+        }
+        setTradeMessage(
+          `Opened ${side} market qty ${formatPrice(sized.qty)} @ ${formatPrice(mark!.markPrice)}.`,
+        )
+        return
+      }
+
+      const limitPrice = Number(limitPriceInput)
+      const placed = await placeOpenLimit({
+        side,
+        qty: sized.qty,
+        limitPrice,
+      })
+      if (!placed.ok) {
+        setTradeMessage(placed.message)
         return
       }
       setTradeMessage(
-        `Opened ${side} market qty ${formatPrice(sized.qty)} @ ${formatPrice(mark!.markPrice)}.`,
+        `Resting ${side} limit open qty ${formatPrice(sized.qty)} @ ${formatPrice(limitPrice)}.`,
       )
-      return
-    }
-
-    const limitPrice = Number(limitPriceInput)
-    const placed = placeOpenLimit({
-      side,
-      qty: sized.qty,
-      limitPrice,
-    })
-    if (!placed.ok) {
-      setTradeMessage(placed.message)
-      return
-    }
-    setTradeMessage(
-      `Resting ${side} limit open qty ${formatPrice(sized.qty)} @ ${formatPrice(limitPrice)}.`,
-    )
+    })()
   }
 
   function handleClosePanelSubmit(event: FormEvent) {
     event.preventDefault()
-    if (closeMode === 'market') {
-      const qty = Number(closeQtyInput)
-      const closed = marketCloseFifo({ side: closeSide, qty })
-      if (!closed.ok) {
-        setTradeMessage(closed.message)
+    void (async () => {
+      if (closeMode === 'market') {
+        const qty = Number(closeQtyInput)
+        const closed = await marketCloseFifo({ side: closeSide, qty })
+        if (!closed.ok) {
+          setTradeMessage(closed.message)
+          return
+        }
+        setTradeMessage(
+          `Market closed ${closeSide} qty ${formatPrice(qty)} FIFO @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
+        )
         return
       }
-      setTradeMessage(
-        `Market closed ${closeSide} qty ${formatPrice(qty)} FIFO @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
-      )
-      return
-    }
-    if (closeMode === 'take-profit') {
-      const limitPrice = Number(tpPriceInput)
-      const qty = Number(tpQtyInput)
-      const placed = placeTakeProfit({ side: closeSide, qty, limitPrice })
+      if (closeMode === 'take-profit') {
+        const limitPrice = Number(tpPriceInput)
+        const qty = Number(tpQtyInput)
+        const placed = await placeTakeProfit({ side: closeSide, qty, limitPrice })
+        if (!placed.ok) {
+          setTradeMessage(
+            placed.message.includes('exceeds')
+              ? `TP qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
+              : placed.message,
+          )
+          return
+        }
+        setTradeMessage(
+          `Take profit ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(limitPrice)}.`,
+        )
+        return
+      }
+      const stopPrice = Number(slPriceInput)
+      const qty = Number(slQtyInput)
+      const placed = await placeStopLoss({ side: closeSide, qty, stopPrice })
       if (!placed.ok) {
         setTradeMessage(
           placed.message.includes('exceeds')
-            ? `TP qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
+            ? `SL qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
             : placed.message,
         )
         return
       }
       setTradeMessage(
-        `Take profit ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(limitPrice)}.`,
+        `Stop loss ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(stopPrice)}.`,
       )
-      return
-    }
-    const stopPrice = Number(slPriceInput)
-    const qty = Number(slQtyInput)
-    const placed = placeStopLoss({ side: closeSide, qty, stopPrice })
-    if (!placed.ok) {
-      setTradeMessage(
-        placed.message.includes('exceeds')
-          ? `SL qty ${formatPrice(qty)} exceeds ${closeSide} net ${formatPrice(session.availableQty(closeSide))}.`
-          : placed.message,
-      )
-      return
-    }
-    setTradeMessage(
-      `Stop loss ${closeSide} qty ${formatPrice(qty)} @ ${formatPrice(stopPrice)}.`,
-    )
+    })()
   }
 
   function handleCloseOpenLot(lotId: string) {
-    const closed = closeOpenLot(lotId)
-    if (!closed.ok) {
-      setTradeMessage(closed.message)
-      return
-    }
-    setTradeMessage(
-      `Closed ${closed.side} qty ${formatPrice(closed.qty)} @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
-    )
+    void (async () => {
+      const closed = await closeOpenLot(lotId)
+      if (!closed.ok) {
+        setTradeMessage(closed.message)
+        return
+      }
+      setTradeMessage(
+        `Closed ${closed.side} qty ${formatPrice(closed.qty)} @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(closed.realizedPnl)}).`,
+      )
+    })()
   }
 
   function handleCloseAll() {
-    const flattened = closeAllPositions()
-    if (!flattened.ok) {
-      setTradeMessage(flattened.message)
-      return
-    }
-    setTradeMessage(
-      `Closed all (${flattened.closedCount} lots) @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(flattened.realizedPnl)}).`,
-    )
+    void (async () => {
+      const flattened = await closeAllPositions()
+      if (!flattened.ok) {
+        setTradeMessage(flattened.message)
+        return
+      }
+      setTradeMessage(
+        `Closed all (${flattened.closedCount} lots) @ ${formatPrice(mark!.markPrice)} (PnL ${formatPnl(flattened.realizedPnl)}).`,
+      )
+    })()
   }
 
   function handleCancelOrder(orderId: string) {
-    const result = cancelPendingOrder(orderId)
-    if (!result.ok) {
-      setTradeMessage(result.message)
-      return
-    }
-    setTradeMessage(`Cancelled order ${orderId}.`)
+    void (async () => {
+      const result = await cancelPendingOrder(orderId)
+      if (!result.ok) {
+        setTradeMessage(result.message)
+        return
+      }
+      setTradeMessage(`Cancelled order ${orderId}.`)
+    })()
   }
 
   const statusText = (() => {
@@ -323,16 +342,25 @@ export default function Dashboard() {
             disabled={loading}
             aria-label="Chart interval"
           >
-            {INTERVALS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
+            {CHART_INTERVALS.map((value) => {
+              const playable =
+                playableIntervals.length === 0 ||
+                playableIntervals.includes(value)
+              return (
+                <option key={value} value={value} disabled={!playable}>
+                  {playable ? value : `${value} (n/a)`}
+                </option>
+              )
+            })}
           </select>
         </label>
         <p className="load-form-hint">
-          Higher TF first, then switch lower to refine. Switch is blocked if the
-          lower TF has no history at the current play time.
+          → Higher TF pauses until Play. → Lower TF keeps going. Chart keeps
+          history up to the sim tip. Playable:{' '}
+          {playableIntervals.length > 0
+            ? playableIntervals.join(', ')
+            : 'load candles first'}
+          .
         </p>
       </div>
 
@@ -646,7 +674,7 @@ export default function Dashboard() {
                               ? '—'
                               : formatPrice(markPrice)}
                           </td>
-                          <td>{lot.entryTime}</td>
+                          <td>{formatTradeTime(lot.entryTime)}</td>
                           <td>
                             {unrealized == null
                               ? '—'
@@ -773,8 +801,8 @@ export default function Dashboard() {
                         <td>{formatPrice(trade.qty)}</td>
                         <td>{formatPrice(trade.entryPrice)}</td>
                         <td>{formatPrice(trade.exitPrice)}</td>
-                        <td>{trade.entryTime}</td>
-                        <td>{trade.exitTime}</td>
+                        <td>{formatTradeTime(trade.entryTime)}</td>
+                        <td>{formatTradeTime(trade.exitTime)}</td>
                         <td>{formatPnl(trade.realizedPnl)}</td>
                         <td>{pct == null ? '—' : formatPnlPercent(pct)}</td>
                       </tr>

@@ -8,7 +8,8 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  advancePlayhead,
+  advancePlayheadBy,
+  barsPerTickForSpeed,
   delayForSpeed,
   initialPlayhead,
   isAtEnd,
@@ -17,25 +18,25 @@ import {
 } from '../playback'
 import {
   ApiError,
-  createSession,
+  advanceSession,
+  cancelSessionOrder,
+  closeSessionPosition,
   fetchCandles,
   getSession,
+  lockSession,
+  openSessionPosition,
+  placeSessionOrder,
+  PACK_PREFETCH_REMAINING,
+  reanchorSessionInterval,
+  startSession as startSessionApi,
+  type CoachRuleFinding,
   type MarketData,
   type TradingSessionDto,
 } from '../services/api'
 import {
   accountBalance,
-  cancelOrder,
-  closeAll,
-  closeLotById,
-  closeQtyFifo,
   markFromCandles,
-  matchLimits,
   netSides,
-  nextTradingId,
-  openMarket,
-  placeLimitOrder,
-  placeStopOrder,
   type ClosedTrade,
   type Lot,
   type Order,
@@ -49,11 +50,23 @@ import {
   formatCandleLoadStatus,
 } from './candleLoadRange'
 import {
+  extendPackEndTime,
+  loadFirstPack,
+  loadNextPack,
+  loadPackAroundWatermark,
+  tipWindowPadMs,
+  type PackSeriesState,
+} from './candlePackLoader'
+import { parseUtcMillis } from '../diary'
+import {
+  CHART_INTERVALS,
   classifyCoverageGap,
   formatIntervalSwitchBlock,
-  playheadForTimestamp,
+  isHigherTimeframe,
+  playheadForWatermark,
   playheadTimestamp,
   seriesCoversTimestamp,
+  seriesCoversWatermark,
 } from './intervalSwitch'
 
 const DEFAULT_STARTING_BALANCE = 10_000
@@ -62,11 +75,14 @@ const DEFAULT_EXCHANGE = 'ByBit'
 
 type LoadRange = { startTime: string; endTime: string }
 
-function newSessionId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID()
+function commandErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return err.message
   }
-  return `sess-${Date.now().toString(36)}`
+  if (err instanceof Error) {
+    return err.message
+  }
+  return fallback
 }
 
 function asSide(value: string): Side | null {
@@ -171,6 +187,10 @@ export interface SessionContextValue {
   interval: string
   /** Pre-load interval pick, or lazy TF switch once candles exist (allowed during play). */
   changeInterval: (value: string) => void
+  /** Intervals that returned candles for the current load range. */
+  playableIntervals: string[]
+  /** Latest sim wall-clock tip (ISO); never moves backward on TF switch. */
+  simWatermark: string | null
   candles: MarketData[]
   sessionStartDate: string
   playhead: number
@@ -198,6 +218,16 @@ export interface SessionContextValue {
   pendingOrders: Order[]
   closedTrades: ClosedTrade[]
   realizedPnl: number
+  coachVerdict: string | null
+  coachAnalysis: string | null
+  coachFindings: CoachRuleFinding[]
+  coachAnalyzedAt: string | null
+  /** Keep last analyze result in session memory after API success. */
+  rememberCoachResult: (result: {
+    verdict: string
+    analysis: string
+    findings: CoachRuleFinding[]
+  }) => void
   sessionStartIndex: number
   visibleCandles: MarketData[]
   atEnd: boolean
@@ -216,9 +246,12 @@ export interface SessionContextValue {
   setSpeed: (speed: PlaybackSpeed) => void
   /** Unlock setup on the entry screen (clears review + active save id). */
   beginSessionSetup: () => void
-  /** Lock a configured sim and enter live trading (Play still starts playback). */
-  startSession: () => { ok: true } | { ok: false; message: string }
-  /** Persist full snapshot; reuses activeSessionId for overwrite. */
+  /**
+   * Create a server-owned session (locked) and enter the sim.
+   * Play still starts playback only.
+   */
+  startSession: () => Promise<{ ok: true } | { ok: false; message: string }>
+  /** Session is already persisted after every command — confirms active id. */
   saveSession: () => Promise<
     { ok: true; id: string } | { ok: false; message: string }
   >
@@ -229,35 +262,41 @@ export interface SessionContextValue {
   openMarketOrder: (params: {
     side: Side
     qty: number
-  }) => { ok: true } | { ok: false; message: string }
+  }) => Promise<{ ok: true } | { ok: false; message: string }>
   placeOpenLimit: (params: {
     side: Side
     qty: number
     limitPrice: number
-  }) => { ok: true } | { ok: false; message: string }
+  }) => Promise<{ ok: true } | { ok: false; message: string }>
   marketCloseFifo: (params: {
     side: Side
     qty: number
-  }) => { ok: true; realizedPnl: number } | { ok: false; message: string }
+  }) => Promise<
+    { ok: true; realizedPnl: number } | { ok: false; message: string }
+  >
   closeOpenLot: (
     lotId: string,
-  ) =>
+  ) => Promise<
     | { ok: true; realizedPnl: number; side: Side; qty: number }
     | { ok: false; message: string }
-  closeAllPositions: () =>
+  >
+  closeAllPositions: () => Promise<
     | { ok: true; realizedPnl: number; closedCount: number }
     | { ok: false; message: string }
+  >
   placeTakeProfit: (params: {
     side: Side
     qty: number
     limitPrice: number
-  }) => { ok: true } | { ok: false; message: string }
+  }) => Promise<{ ok: true } | { ok: false; message: string }>
   placeStopLoss: (params: {
     side: Side
     qty: number
     stopPrice: number
-  }) => { ok: true } | { ok: false; message: string }
-  cancelPendingOrder: (orderId: string) => { ok: true } | { ok: false; message: string }
+  }) => Promise<{ ok: true } | { ok: false; message: string }>
+  cancelPendingOrder: (
+    orderId: string,
+  ) => Promise<{ ok: true } | { ok: false; message: string }>
   availableQty: (side: Side) => number
 }
 
@@ -284,27 +323,52 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   )
   const [rangeEndDate, setRangeEndDate] = useState(DEFAULT_RANGE_DATES.endDate)
   const [loadRange, setLoadRange] = useState<LoadRange | null>(null)
-  const [seriesCache, setSeriesCache] = useState<Record<string, MarketData[]>>(
-    {},
-  )
+  const [seriesCache, setSeriesCache] = useState<
+    Record<string, PackSeriesState>
+  >({})
+  const packPrefetchInFlightRef = useRef(false)
+  const intervalRef = useRef(interval)
+  const [playableIntervals, setPlayableIntervals] = useState<string[]>([])
+  const [simWatermark, setSimWatermark] = useState<string | null>(null)
+  const [simMark, setSimMark] = useState<{
+    markPrice: number
+    markTime: string
+  } | null>(null)
 
   const [startingBalance, setStartingBalance] = useState(DEFAULT_STARTING_BALANCE)
   const [lots, setLots] = useState<Lot[]>([])
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>([])
   const [realizedPnl, setRealizedPnl] = useState(0)
+  const [coachVerdict, setCoachVerdict] = useState<string | null>(null)
+  const [coachAnalysis, setCoachAnalysis] = useState<string | null>(null)
+  const [coachFindings, setCoachFindings] = useState<CoachRuleFinding[]>([])
+  const [coachAnalyzedAt, setCoachAnalyzedAt] = useState<string | null>(null)
 
   const loadAbortRef = useRef<AbortController | null>(null)
   const playheadRef = useRef(playhead)
   const candlesRef = useRef(candles)
   const intervalSwitchAbortRef = useRef<AbortController | null>(null)
-  const tradingRef = useRef({
-    lots,
-    pendingOrders,
-    closedTrades,
-    realizedPnl,
-    startingBalance,
-  })
+  const activeSessionIdRef = useRef<string | null>(null)
+  const serverPlayheadRef = useRef(0)
+  const pendingToPlayheadRef = useRef<number | null>(null)
+  const advanceInFlightRef = useRef(false)
+  const tradeQueueRef = useRef<
+    Array<{
+      run: () => Promise<
+        { ok: true; session: TradingSessionDto } | { ok: false; message: string }
+      >
+      resolve: (
+        value:
+          | { ok: true; session: TradingSessionDto }
+          | { ok: false; message: string },
+      ) => void
+    }>
+  >([])
+  const pumpRunningRef = useRef(false)
+  const isReviewModeRef = useRef(isReviewMode)
+  const markRef = useRef<{ markPrice: number; markTime: string } | null>(null)
+  const speedRef = useRef(speed)
 
   const sessionStartIndex =
     candles.length === 0
@@ -313,15 +377,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           candles,
           sessionStartDate || candles[0]!.timestamp,
         )
-  const visibleCandles = useMemo(
-    () => candles.slice(sessionStartIndex, playhead),
-    [candles, sessionStartIndex, playhead],
-  )
+  // Fog-of-war hides only the future (after playhead). Show the full active pack
+  // up to the tip so LTF switches keep history (tip-centered 1m packs, HTF context).
+  const visibleCandles = useMemo(() => {
+    if (playhead <= 0) {
+      return []
+    }
+    return candles.slice(0, playhead)
+  }, [candles, playhead])
   const atEnd = isAtEnd(playhead, candles.length)
   const hasCandles = candles.length > 0
-  // Fills use the active chart TF (trade on a lower TF for finer price/time).
-  // Markers/spans snap those times onto whatever TF is displayed.
-  const mark = markFromCandles(visibleCandles)
+  // Prefer the chart tip when optimistic playhead is ahead of the last server mark.
+  const chartMark = markFromCandles(visibleCandles)
+  const mark = (() => {
+    if (chartMark == null) {
+      return simMark
+    }
+    if (simMark == null) {
+      return chartMark
+    }
+    const chartMs = parseUtcMillis(chartMark.markTime)
+    const simMs = parseUtcMillis(simMark.markTime)
+    if (chartMs != null && simMs != null && chartMs > simMs) {
+      return chartMark
+    }
+    return simMark
+  })()
   const balance = accountBalance({ startingBalance, realizedPnl })
   const nets = netSides(lots)
   const canTrade = sessionLocked && !isReviewMode && mark != null
@@ -342,55 +423,273 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [candles])
 
   useEffect(() => {
-    tradingRef.current = {
-      lots,
-      pendingOrders,
-      closedTrades,
-      realizedPnl,
-      startingBalance,
-    }
-  }, [lots, pendingOrders, closedTrades, realizedPnl, startingBalance])
+    activeSessionIdRef.current = activeSessionId
+  }, [activeSessionId])
 
-  const applyLimitMatchRef = useRef((newBar: MarketData) => {
-    const current = tradingRef.current
-    if (current.pendingOrders.length === 0) {
+  useEffect(() => {
+    isReviewModeRef.current = isReviewMode
+  }, [isReviewMode])
+
+  useEffect(() => {
+    speedRef.current = speed
+  }, [speed])
+
+  useEffect(() => {
+    markRef.current = mark
+  }, [mark])
+
+  useEffect(() => {
+    intervalRef.current = interval
+  }, [interval])
+
+  // Prefetch the next ~500-bar pack when play nears the end of the FE page.
+  // Do not abort on playhead ticks — only one in-flight fetch at a time.
+  useEffect(() => {
+    if (!loadRange || isReviewMode || packPrefetchInFlightRef.current) {
       return
     }
-    const paperBalance = current.startingBalance + current.realizedPnl
-    const matched = matchLimits({
-      orders: current.pendingOrders,
-      lots: current.lots,
-      bar: newBar,
-      balance: paperBalance,
+    const remaining = candles.length - playhead
+    if (remaining > PACK_PREFETCH_REMAINING) {
+      return
+    }
+    const pack = seriesCache[interval]
+    if (!pack) {
+      return
+    }
+
+    let endTime = pack.endTime
+    let current = pack
+    if (!pack.hasMore) {
+      const extended = extendPackEndTime(
+        pack.endTime,
+        loadRange.endTime,
+        tipWindowPadMs(interval),
+      )
+      if (extended == null) {
+        return
+      }
+      endTime = extended
+      current = { ...pack, endTime: extended, hasMore: true }
+    }
+
+    const prefetchInterval = interval
+    packPrefetchInFlightRef.current = true
+    void loadNextPack({
+      symbol: symbol.trim().toUpperCase(),
+      interval: prefetchInterval,
+      current,
+      endTime,
     })
+      .then((next) => {
+        setSeriesCache((prev) => ({ ...prev, [prefetchInterval]: next }))
+        if (intervalRef.current === prefetchInterval) {
+          setCandles(next.candles)
+          candlesRef.current = next.candles
+        }
+      })
+      .catch((err: unknown) => {
+        if (!isAbortError(err)) {
+          setLoadWarning(
+            (prev) =>
+              prev ??
+              commandErrorMessage(err, 'Failed to prefetch next candle pack'),
+          )
+        }
+      })
+      .finally(() => {
+        packPrefetchInFlightRef.current = false
+      })
+  }, [
+    playhead,
+    candles.length,
+    interval,
+    loadRange,
+    isReviewMode,
+    seriesCache,
+    symbol,
+  ])
 
-    tradingRef.current = {
-      ...current,
-      lots: matched.lots,
-      pendingOrders: matched.orders,
-      closedTrades: [...current.closedTrades, ...matched.closedTrades],
-      realizedPnl: current.realizedPnl + matched.realizedPnlDelta,
+  function applyCoachFields(snapshot: TradingSessionDto) {
+    setCoachVerdict(snapshot.coachVerdict ?? null)
+    setCoachAnalysis(snapshot.coachAnalysis ?? null)
+    setCoachFindings(snapshot.coachFindings ?? [])
+    setCoachAnalyzedAt(snapshot.coachAnalyzedAt ?? null)
+  }
+
+  function rememberCoachResult(result: {
+    verdict: string
+    analysis: string
+    findings: CoachRuleFinding[]
+  }) {
+    setCoachVerdict(result.verdict)
+    setCoachAnalysis(result.analysis)
+    setCoachFindings(result.findings)
+    setCoachAnalyzedAt(new Date().toISOString())
+  }
+
+  function applySimClock(snapshot: TradingSessionDto) {
+    if (snapshot.simWatermark) {
+      setSimWatermark(snapshot.simWatermark)
+    }
+    if (
+      snapshot.simMarkPrice != null &&
+      snapshot.simMarkPrice > 0 &&
+      snapshot.simMarkTime
+    ) {
+      setSimMark({
+        markPrice: snapshot.simMarkPrice,
+        markTime: snapshot.simMarkTime,
+      })
+    }
+  }
+
+  function applyServerTradingState(
+    snapshot: TradingSessionDto,
+    options?: { preserveOptimisticPlayhead?: boolean },
+  ) {
+    const nextLots = mapImportedLots(snapshot.lots ?? [])
+    const nextOrders = mapImportedOrders(snapshot.pendingOrders ?? [])
+    const nextTrades = mapImportedClosedTrades(snapshot.closedTrades ?? [])
+    const nextPnl = snapshot.realizedPnl
+    const nextBalance = snapshot.startingBalance
+    const serverPlayhead = snapshot.playhead
+    serverPlayheadRef.current = serverPlayhead
+
+    const optimistic = pendingToPlayheadRef.current
+    const nextPlayhead =
+      options?.preserveOptimisticPlayhead &&
+      optimistic != null &&
+      optimistic > serverPlayhead
+        ? optimistic
+        : serverPlayhead
+
+    setLots(nextLots)
+    setPendingOrders(nextOrders)
+    setClosedTrades(nextTrades)
+    setRealizedPnl(nextPnl)
+    setStartingBalance(nextBalance)
+    setPlayhead(nextPlayhead)
+    setSessionLocked(snapshot.sessionLocked)
+    setActiveSessionId(snapshot.id)
+    activeSessionIdRef.current = snapshot.id
+    playheadRef.current = nextPlayhead
+    if (snapshot.interval) {
+      setInterval(snapshot.interval)
+    }
+    applySimClock(snapshot)
+    applyCoachFields(snapshot)
+  }
+
+  async function pumpSessionWork() {
+    if (pumpRunningRef.current) {
+      return
+    }
+    pumpRunningRef.current = true
+    try {
+      while (true) {
+        const sessionId = activeSessionIdRef.current
+        if (!sessionId || isReviewModeRef.current) {
+          break
+        }
+
+        // Catch server playhead up to the chart tip BEFORE trades/orders so
+        // Buy/Close use the same mark time the learner sees (not a stale tip).
+        const pendingTarget = pendingToPlayheadRef.current
+        const serverHead = serverPlayheadRef.current
+        const hasTradeWaiting = tradeQueueRef.current.length > 0
+        if (pendingTarget != null && pendingTarget > serverHead) {
+          pendingToPlayheadRef.current = null
+          advanceInFlightRef.current = true
+          const to = pendingTarget
+          try {
+            const session = await advanceSession(sessionId, to)
+            applyServerTradingState(session, {
+              // When a trade is waiting, snap to the flushed tip (no optimistic gap).
+              preserveOptimisticPlayhead: !hasTradeWaiting,
+            })
+            if (isAtEnd(session.playhead, candlesRef.current.length)) {
+              setPlaying(false)
+            }
+          } catch (err: unknown) {
+            setTradeMessage(
+              commandErrorMessage(err, 'Failed to advance session'),
+            )
+            setPlaying(false)
+            pendingToPlayheadRef.current = null
+            // Snap chart back to last confirmed server playhead.
+            setPlayhead(serverPlayheadRef.current)
+            playheadRef.current = serverPlayheadRef.current
+          } finally {
+            advanceInFlightRef.current = false
+          }
+          continue
+        }
+
+        const job = tradeQueueRef.current.shift()
+        if (job) {
+          try {
+            const result = await job.run()
+            job.resolve(result)
+          } catch (err: unknown) {
+            job.resolve({
+              ok: false,
+              message: commandErrorMessage(err, 'Session command failed'),
+            })
+          }
+          continue
+        }
+
+        break
+      }
+    } finally {
+      pumpRunningRef.current = false
+      if (
+        (pendingToPlayheadRef.current != null &&
+          pendingToPlayheadRef.current > serverPlayheadRef.current) ||
+        tradeQueueRef.current.length > 0
+      ) {
+        void pumpSessionWork()
+      }
+    }
+  }
+
+  function scheduleAdvanceTo(toPlayhead: number) {
+    const currentPending = pendingToPlayheadRef.current
+    pendingToPlayheadRef.current =
+      currentPending == null
+        ? toPlayhead
+        : Math.max(currentPending, toPlayhead)
+    // Optimistic chart reveal; server remains source of trading truth.
+    setPlayhead(toPlayhead)
+    playheadRef.current = toPlayhead
+    void pumpSessionWork()
+  }
+
+  function runSessionCommand(
+    action: (sessionId: string) => Promise<TradingSessionDto>,
+  ): Promise<
+    { ok: true; session: TradingSessionDto } | { ok: false; message: string }
+  > {
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId) {
+      return Promise.resolve({
+        ok: false,
+        message: 'No active server session.',
+      })
     }
 
-    setLots(matched.lots)
-    setPendingOrders(matched.orders)
-    if (matched.closedTrades.length > 0) {
-      setClosedTrades((prev) => [...prev, ...matched.closedTrades])
-    }
-    if (matched.realizedPnlDelta !== 0) {
-      setRealizedPnl((prev) => prev + matched.realizedPnlDelta)
-    }
-    if (matched.cancelled.length > 0) {
-      const ids = matched.cancelled.map((c) => c.order.id).join(', ')
-      setTradeMessage(
-        `Limit order(s) cancelled (soft cap at fill): ${ids}`,
-      )
-    } else if (matched.filled.length > 0) {
-      setTradeMessage(
-        `Filled ${matched.filled.length} limit order(s) on new bar.`,
-      )
-    }
-  })
+    return new Promise((resolve) => {
+      tradeQueueRef.current.push({
+        run: async () => {
+          const session = await action(sessionId)
+          applyServerTradingState(session)
+          return { ok: true, session }
+        },
+        resolve,
+      })
+      void pumpSessionWork()
+    })
+  }
 
   useEffect(() => {
     if (!playing) {
@@ -399,18 +698,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     const length = candles.length
     const timerId = window.setInterval(() => {
-      const previous = playheadRef.current
-      const result = advancePlayhead(previous, length)
-      if (result.playhead > previous) {
-        const newBar = candlesRef.current[result.playhead - 1]
-        if (newBar) {
-          applyLimitMatchRef.current(newBar)
-        }
+      if (isReviewModeRef.current) {
+        return
       }
-      setPlayhead(result.playhead)
-      if (result.kind === 'atEnd') {
+      if (!activeSessionIdRef.current) {
         setPlaying(false)
+        return
       }
+      const previous = playheadRef.current
+      const steps = barsPerTickForSpeed(speedRef.current)
+      const result = advancePlayheadBy(previous, length, steps)
+      if (result.playhead <= previous) {
+        if (result.kind === 'atEnd') {
+          setPlaying(false)
+        }
+        return
+      }
+      scheduleAdvanceTo(result.playhead)
     }, delayForSpeed(speed))
 
     return () => {
@@ -418,32 +722,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [playing, speed, candles.length])
 
-  function syncTradingRef(
-    patch: Partial<{
-      lots: Lot[]
-      pendingOrders: Order[]
-      closedTrades: ClosedTrade[]
-      realizedPnl: number
-      startingBalance: number
-    }>,
-  ) {
-    tradingRef.current = { ...tradingRef.current, ...patch }
-  }
-
   function resetTrading() {
     const empty = emptyTradingState()
     setLots(empty.lots)
     setPendingOrders(empty.pendingOrders)
     setClosedTrades(empty.closedTrades)
     setRealizedPnl(empty.realizedPnl)
+    setCoachVerdict(null)
+    setCoachAnalysis(null)
+    setCoachFindings([])
+    setCoachAnalyzedAt(null)
     setTradeMessage(null)
-    syncTradingRef({
-      lots: empty.lots,
-      pendingOrders: empty.pendingOrders,
-      closedTrades: empty.closedTrades,
-      realizedPnl: empty.realizedPnl,
-      startingBalance,
-    })
   }
 
   function resetSessionFromCandles(data: MarketData[], startDate: string) {
@@ -470,8 +759,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!hasCandles || atEnd || playing || isReviewMode) {
       return
     }
-    setSessionLocked(true)
-    setPlaying(true)
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId) {
+      setTradeMessage('Start a server session before playing.')
+      return
+    }
+    if (sessionLocked) {
+      setPlaying(true)
+      return
+    }
+    void runSessionCommand((id) => lockSession(id)).then((result) => {
+      if (!result.ok) {
+        setTradeMessage(result.message)
+        return
+      }
+      setPlaying(true)
+    })
   }
 
   function handlePause() {
@@ -492,73 +795,63 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     resetTrading()
   }
 
-  function startSession(): { ok: true } | { ok: false; message: string } {
+  async function startSession(): Promise<
+    { ok: true } | { ok: false; message: string }
+  > {
     if (!hasCandles) {
       return { ok: false, message: 'Load candles before starting a session.' }
     }
-    setIsReviewMode(false)
-    setActiveSessionId(null)
-    setSaveMessage(null)
-    setSessionLocked(true)
-    setPlaying(false)
-    return { ok: true }
-  }
+    if (!loadRange) {
+      return {
+        ok: false,
+        message: 'Cannot start without a candle load range reference.',
+      }
+    }
 
-  function buildSnapshot(id: string): TradingSessionDto {
-    return {
-      id,
-      symbol: symbol.trim().toUpperCase(),
-      exchange: DEFAULT_EXCHANGE,
-      interval,
-      rangeStart: loadRange?.startTime ?? null,
-      rangeEnd: loadRange?.endTime ?? null,
-      sessionStartDate,
-      playhead,
-      sessionLocked: true,
-      startingBalance,
-      realizedPnl,
-      lots,
-      pendingOrders,
-      closedTrades,
+    setLoading(true)
+    setSaveMessage(null)
+    setTradeMessage(null)
+    setIsReviewMode(false)
+    setPlaying(false)
+    try {
+      const session = await startSessionApi({
+        symbol: symbol.trim().toUpperCase(),
+        exchange: DEFAULT_EXCHANGE,
+        interval,
+        rangeStart: loadRange.startTime,
+        rangeEnd: loadRange.endTime,
+        sessionStartDate,
+        startingBalance,
+        playhead,
+      })
+      applyServerTradingState(session)
+      // Trade route requires a locked session; keep UI locked even if an older
+      // API build still returns sessionLocked=false from Start.
+      setSessionLocked(true)
+      setSaveMessage(`Session started (${session.id.slice(0, 8)}…).`)
+      return { ok: true }
+    } catch (err) {
+      const message = commandErrorMessage(err, 'Failed to start session')
+      setSaveMessage(message)
+      return { ok: false, message }
+    } finally {
+      setLoading(false)
     }
   }
 
   async function saveSession(): Promise<
     { ok: true; id: string } | { ok: false; message: string }
   > {
-    if (!sessionLocked || isReviewMode) {
+    if (!activeSessionId || isReviewMode) {
       return {
         ok: false,
-        message: 'Save is only available during a live locked session.',
+        message: 'No live server session to confirm.',
       }
     }
-    if (!loadRange) {
-      return {
-        ok: false,
-        message: 'Cannot save without a candle load range reference.',
-      }
-    }
-
-    const id = activeSessionId ?? newSessionId()
-    setLoading(true)
-    setSaveMessage(null)
-    try {
-      const result = await createSession(buildSnapshot(id))
-      setActiveSessionId(result.id)
-      setSaveMessage(`Session saved (${result.id.slice(0, 8)}…).`)
-      return { ok: true, id: result.id }
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'Failed to save session'
-      setSaveMessage(message)
-      return { ok: false, message }
-    } finally {
-      setLoading(false)
-    }
+    setSaveMessage(
+      `Session is persisted on the server (${activeSessionId.slice(0, 8)}…).`,
+    )
+    return { ok: true, id: activeSessionId }
   }
 
   async function importSessionForReview(
@@ -620,21 +913,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setPendingOrders(nextOrders)
       setClosedTrades(nextTrades)
       setRealizedPnl(nextPnl)
+      applyCoachFields(snapshot)
       setLoadRange({
         startTime: snapshot.rangeStart,
         endTime: snapshot.rangeEnd,
       })
-      setSeriesCache({ [snapshot.interval]: result.candles })
+      setSeriesCache({
+        [snapshot.interval]: {
+          candles: result.candles,
+          nextOffset: result.candles.length,
+          totalCount: result.totalCount ?? result.candles.length,
+          hasMore: result.hasMore ?? false,
+          startTime: snapshot.rangeStart,
+          endTime: snapshot.rangeEnd,
+        },
+      })
+      setPlayableIntervals([snapshot.interval])
+      applySimClock(snapshot)
       setActiveSessionId(snapshot.id)
+      activeSessionIdRef.current = snapshot.id
       setIsReviewMode(true)
       setSessionLocked(true)
-      syncTradingRef({
-        lots: nextLots,
-        pendingOrders: nextOrders,
-        closedTrades: nextTrades,
-        realizedPnl: nextPnl,
-        startingBalance: nextBalance,
-      })
       setLoadWarning(
         formatCandleLoadStatus({
           source: result.source,
@@ -662,10 +961,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return side === 'long' ? nets.long.qty : nets.short.qty
   }
 
-  function openMarketOrder(params: {
-    side: Side
-    qty: number
-  }): { ok: true } | { ok: false; message: string } {
+  function requireLiveTrade(): { ok: true } | { ok: false; message: string } {
     if (!canTrade || !mark) {
       return {
         ok: false,
@@ -674,167 +970,144 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           : 'Play once to lock the session before trading.',
       }
     }
-    const opened = openMarket({
-      lots,
-      side: params.side,
-      qty: params.qty,
-      markPrice: mark.markPrice,
-      markTime: mark.markTime,
-      balance,
-    })
-    if (!opened.ok) {
-      return opened
-    }
-    setLots(opened.lots)
-    syncTradingRef({ lots: opened.lots })
     return { ok: true }
   }
 
-  function placeOpenLimit(params: {
+  async function openMarketOrder(params: {
+    side: Side
+    qty: number
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
+      return gate
+    }
+    const result = await runSessionCommand((id) =>
+      openSessionPosition(id, {
+        side: params.side,
+        qty: params.qty,
+      }),
+    )
+    return result.ok ? { ok: true } : result
+  }
+
+  async function placeOpenLimit(params: {
     side: Side
     qty: number
     limitPrice: number
-  }): { ok: true } | { ok: false; message: string } {
-    if (!canTrade || !mark) {
-      return {
-        ok: false,
-        message: sessionLocked
-          ? 'Cannot trade without a mark candle.'
-          : 'Play once to lock the session before trading.',
-      }
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
+      return gate
     }
     if (!(params.limitPrice > 0)) {
       return { ok: false, message: 'Limit price must be positive.' }
     }
-    const order: Order = {
-      id: nextTradingId('ord'),
-      side: params.side,
-      intent: 'open',
-      type: 'limit',
-      qty: params.qty,
-      limitPrice: params.limitPrice,
-      createdAt: mark.markTime,
-    }
-    const nextOrders = placeLimitOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
-    return { ok: true }
+    const result = await runSessionCommand((id) =>
+      placeSessionOrder(id, {
+        side: params.side,
+        intent: 'open',
+        type: 'limit',
+        qty: params.qty,
+        limitPrice: params.limitPrice,
+      }),
+    )
+    return result.ok ? { ok: true } : result
   }
 
-  function marketCloseFifo(params: {
+  async function marketCloseFifo(params: {
     side: Side
     qty: number
-  }): { ok: true; realizedPnl: number } | { ok: false; message: string } {
-    if (!canTrade || !mark) {
-      return {
-        ok: false,
-        message: 'Cannot close — session locked with a mark candle required.',
-      }
+  }): Promise<
+    { ok: true; realizedPnl: number } | { ok: false; message: string }
+  > {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
+      return gate
     }
     if (!(params.qty > 0)) {
       return { ok: false, message: 'Close qty must be positive.' }
     }
-    const closed = closeQtyFifo(
-      lots,
-      params.side,
-      params.qty,
-      mark.markPrice,
-      mark.markTime,
+    const beforePnl = realizedPnl
+    const result = await runSessionCommand((id) =>
+      closeSessionPosition(id, {
+        mode: 'qty',
+        side: params.side,
+        qty: params.qty,
+      }),
     )
-    if (!closed.ok) {
-      return closed
+    if (!result.ok) {
+      return result
     }
-    const nextTrades = [...closedTrades, ...closed.closedTrades]
-    const nextPnl = realizedPnl + closed.realizedPnl
-    setLots(closed.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: closed.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
-    return { ok: true, realizedPnl: closed.realizedPnl }
-  }
-
-  function closeOpenLot(
-    lotId: string,
-  ):
-    | { ok: true; realizedPnl: number; side: Side; qty: number }
-    | { ok: false; message: string } {
-    if (!canTrade || !mark) {
-      return {
-        ok: false,
-        message: 'Cannot close — session locked with a mark candle required.',
-      }
-    }
-    const closed = closeLotById({
-      lots,
-      lotId,
-      exitPrice: mark.markPrice,
-      exitTime: mark.markTime,
-    })
-    if (!closed.ok) {
-      return closed
-    }
-    const nextTrades = [...closedTrades, closed.closedTrade]
-    const nextPnl = realizedPnl + closed.realizedPnl
-    setLots(closed.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: closed.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
     return {
       ok: true,
-      realizedPnl: closed.realizedPnl,
-      side: closed.closedTrade.side,
-      qty: closed.closedTrade.qty,
+      realizedPnl: result.session.realizedPnl - beforePnl,
     }
   }
 
-  function closeAllPositions():
+  async function closeOpenLot(
+    lotId: string,
+  ): Promise<
+    | { ok: true; realizedPnl: number; side: Side; qty: number }
+    | { ok: false; message: string }
+  > {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
+      return gate
+    }
+    const before = lots.find((lot) => lot.id === lotId)
+    const beforePnl = realizedPnl
+    const result = await runSessionCommand((id) =>
+      closeSessionPosition(id, { mode: 'lotId', lotId }),
+    )
+    if (!result.ok) {
+      return result
+    }
+    const closed = result.session.closedTrades[result.session.closedTrades.length - 1]
+    const side = asSide(closed?.side ?? before?.side ?? '')
+    if (!side) {
+      return { ok: false, message: 'Close succeeded but side was invalid.' }
+    }
+    return {
+      ok: true,
+      realizedPnl: result.session.realizedPnl - beforePnl,
+      side,
+      qty: closed?.qty ?? before?.qty ?? 0,
+    }
+  }
+
+  async function closeAllPositions(): Promise<
     | { ok: true; realizedPnl: number; closedCount: number }
-    | { ok: false; message: string } {
-    if (!canTrade || !mark) {
-      return {
-        ok: false,
-        message: 'Cannot close — session locked with a mark candle required.',
-      }
+    | { ok: false; message: string }
+  > {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
+      return gate
     }
     if (lots.length === 0) {
       return { ok: false, message: 'Already flat — nothing to close.' }
     }
-    const flattened = closeAll({
-      lots,
-      exitPrice: mark.markPrice,
-      exitTime: mark.markTime,
-    })
-    const nextTrades = [...closedTrades, ...flattened.closedTrades]
-    const nextPnl = realizedPnl + flattened.realizedPnl
-    setLots(flattened.lots)
-    setClosedTrades(nextTrades)
-    setRealizedPnl(nextPnl)
-    syncTradingRef({
-      lots: flattened.lots,
-      closedTrades: nextTrades,
-      realizedPnl: nextPnl,
-    })
+    const beforeCount = closedTrades.length
+    const beforePnl = realizedPnl
+    const result = await runSessionCommand((id) =>
+      closeSessionPosition(id, { mode: 'all' }),
+    )
+    if (!result.ok) {
+      return result
+    }
     return {
       ok: true,
-      realizedPnl: flattened.realizedPnl,
-      closedCount: flattened.closedTrades.length,
+      realizedPnl: result.session.realizedPnl - beforePnl,
+      closedCount: result.session.closedTrades.length - beforeCount,
     }
   }
 
-  function placeTakeProfit(params: {
+  async function placeTakeProfit(params: {
     side: Side
     qty: number
     limitPrice: number
-  }): { ok: true } | { ok: false; message: string } {
-    if (!canTrade || !mark) {
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
       return {
         ok: false,
         message: 'Cannot place take profit — lock session and wait for mark.',
@@ -850,27 +1123,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         message: `TP qty exceeds ${params.side} net.`,
       }
     }
-    const order: Order = {
-      id: nextTradingId('ord'),
-      side: params.side,
-      intent: 'close',
-      type: 'limit',
-      qty: params.qty,
-      limitPrice: params.limitPrice,
-      createdAt: mark.markTime,
-    }
-    const nextOrders = placeLimitOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
-    return { ok: true }
+    const result = await runSessionCommand((id) =>
+      placeSessionOrder(id, {
+        side: params.side,
+        intent: 'close',
+        type: 'limit',
+        qty: params.qty,
+        limitPrice: params.limitPrice,
+      }),
+    )
+    return result.ok ? { ok: true } : result
   }
 
-  function placeStopLoss(params: {
+  async function placeStopLoss(params: {
     side: Side
     qty: number
     stopPrice: number
-  }): { ok: true } | { ok: false; message: string } {
-    if (!canTrade || !mark) {
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    const gate = requireLiveTrade()
+    if (!gate.ok) {
       return {
         ok: false,
         message: 'Cannot place stop loss — lock session and wait for mark.',
@@ -886,44 +1157,38 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         message: `SL qty exceeds ${params.side} net.`,
       }
     }
-    const order: Order = {
-      id: nextTradingId('ord'),
-      side: params.side,
-      intent: 'close',
-      type: 'stop',
-      qty: params.qty,
-      limitPrice: params.stopPrice,
-      createdAt: mark.markTime,
-    }
-    const nextOrders = placeStopOrder(pendingOrders, order)
-    setPendingOrders(nextOrders)
-    syncTradingRef({ pendingOrders: nextOrders })
-    return { ok: true }
+    const result = await runSessionCommand((id) =>
+      placeSessionOrder(id, {
+        side: params.side,
+        intent: 'close',
+        type: 'stop',
+        qty: params.qty,
+        limitPrice: params.stopPrice,
+      }),
+    )
+    return result.ok ? { ok: true } : result
   }
 
-  function cancelPendingOrder(
+  async function cancelPendingOrder(
     orderId: string,
-  ): { ok: true } | { ok: false; message: string } {
-    const result = cancelOrder(pendingOrders, orderId)
-    if (!result.cancelled) {
-      return { ok: false, message: `Order ${orderId} not found.` }
-    }
-    setPendingOrders(result.orders)
-    syncTradingRef({ pendingOrders: result.orders })
-    return { ok: true }
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const result = await runSessionCommand((id) =>
+      cancelSessionOrder(id, orderId),
+    )
+    return result.ok ? { ok: true } : result
   }
 
   function applyIntervalSeries(
     nextInterval: string,
     nextCandles: MarketData[],
-    currentTime: string,
+    watermarkIso: string,
   ): boolean {
-    if (!seriesCoversTimestamp(nextCandles, currentTime)) {
-      const reason = classifyCoverageGap(nextCandles, currentTime)
+    if (!seriesCoversTimestamp(nextCandles, watermarkIso)) {
+      const reason = classifyCoverageGap(nextCandles, watermarkIso)
       setLoadWarning(
         formatIntervalSwitchBlock({
           interval: nextInterval,
-          currentTime,
+          currentTime: watermarkIso,
           availableFrom: nextCandles[0]?.timestamp,
           availableTo: nextCandles[nextCandles.length - 1]?.timestamp,
           reason,
@@ -932,13 +1197,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return false
     }
 
-    const nextPlayhead = playheadForTimestamp(nextCandles, currentTime)
+    const nextPlayhead = playheadForWatermark(
+      nextCandles,
+      watermarkIso,
+      nextInterval,
+    )
     setInterval(nextInterval)
     setCandles(nextCandles)
     setPlayhead(nextPlayhead)
+    playheadRef.current = nextPlayhead
+    candlesRef.current = nextCandles
     setLoadWarning(
-      `Switched to ${nextInterval} at ${currentTime} (wall time preserved). ` +
-        'Lower timeframes may not reach as far back as higher ones.',
+      `Switched to ${nextInterval} at ${watermarkIso} (sim watermark preserved). ` +
+        'Higher TF pauses until Play; lower TF continues.',
     )
     return true
   }
@@ -953,60 +1224,163 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const currentTime = playheadTimestamp(candles, playhead)
-    if (currentTime == null) {
+    if (
+      playableIntervals.length > 0 &&
+      !playableIntervals.includes(nextInterval)
+    ) {
+      setLoadWarning(
+        `Interval ${nextInterval} is not playable for this load range.`,
+      )
+      return
+    }
+
+    const watermark =
+      simWatermark ?? playheadTimestamp(candles, playhead)
+    if (watermark == null) {
       setInterval(nextInterval)
       return
     }
 
-    const cached = seriesCache[nextInterval]
-    if (cached) {
-      applyIntervalSeries(nextInterval, cached, currentTime)
-      return
-    }
+    const goingHigher = isHigherTimeframe(interval, nextInterval)
+    const wasPlaying = playing
+    // →HTF always pauses; →LTF keeps playing after remap when it was playing.
+    setPlaying(false)
 
     intervalSwitchAbortRef.current?.abort()
     const controller = new AbortController()
     intervalSwitchAbortRef.current = controller
-
-    const wasPlaying = playing
-    setPlaying(false)
     setLoading(true)
     setError(null)
 
     try {
-      const result = await fetchCandles({
-        symbol: symbol.trim().toUpperCase(),
-        interval: nextInterval,
-        startTime: loadRange.startTime,
-        endTime: loadRange.endTime,
-        refresh: false,
-        signal: controller.signal,
-      })
+      const sessionId = activeSessionIdRef.current
+      // Flush optimistic playhead so server watermark matches the chart tip
+      // before remapping — otherwise TF switch can snap time backward.
+      if (
+        sessionId &&
+        sessionLocked &&
+        !isReviewMode &&
+        pendingToPlayheadRef.current != null &&
+        pendingToPlayheadRef.current > serverPlayheadRef.current
+      ) {
+        const flushTo = pendingToPlayheadRef.current
+        pendingToPlayheadRef.current = null
+        const flushed = await advanceSession(
+          sessionId,
+          flushTo,
+          controller.signal,
+        )
+        applyServerTradingState(flushed)
+      } else {
+        pendingToPlayheadRef.current = null
+      }
 
-      setSeriesCache((prev) => ({ ...prev, [nextInterval]: result.candles }))
+      const tipWatermark =
+        simWatermark ??
+        playheadTimestamp(candlesRef.current, playheadRef.current) ??
+        watermark
 
-      if (result.candles.length === 0) {
+      // Tip±2d window for the new TF — not from pack start (LTF would waste pages).
+      let packState = seriesCache[nextInterval]
+      if (
+        !packState ||
+        !seriesCoversWatermark(
+          packState.candles,
+          tipWatermark,
+          nextInterval,
+        )
+      ) {
+        packState = await loadPackAroundWatermark({
+          symbol: symbol.trim().toUpperCase(),
+          interval: nextInterval,
+          rangeStartIso: loadRange.startTime,
+          rangeEndIso: loadRange.endTime,
+          watermarkIso: tipWatermark,
+          signal: controller.signal,
+        })
+        if (packState.candles.length > 0) {
+          setSeriesCache((prev) => ({ ...prev, [nextInterval]: packState! }))
+          setPlayableIntervals((prev) =>
+            prev.includes(nextInterval) ? prev : [...prev, nextInterval],
+          )
+        }
+      }
+
+      const nextCandles = packState?.candles ?? []
+      if (nextCandles.length === 0) {
         setLoadWarning(
           formatIntervalSwitchBlock({
             interval: nextInterval,
-            currentTime,
+            currentTime: tipWatermark,
             reason: 'empty',
           }),
         )
         return
       }
 
+      if (!seriesCoversWatermark(nextCandles, tipWatermark, nextInterval)) {
+        const reason = classifyCoverageGap(nextCandles, tipWatermark)
+        setLoadWarning(
+          formatIntervalSwitchBlock({
+            interval: nextInterval,
+            currentTime: tipWatermark,
+            availableFrom: nextCandles[0]?.timestamp,
+            availableTo: nextCandles[nextCandles.length - 1]?.timestamp,
+            reason: reason === 'empty' ? 'too-early' : reason,
+          }),
+        )
+        return
+      }
+
+      if (sessionId && sessionLocked && !isReviewMode) {
+        const session = await reanchorSessionInterval(
+          sessionId,
+          nextInterval,
+          controller.signal,
+        )
+        const seriesForInterval =
+          session.interval === nextInterval
+            ? packState!
+            : (seriesCache[session.interval] ?? packState!)
+        setSeriesCache((prev) => ({
+          ...prev,
+          [session.interval]: seriesForInterval,
+        }))
+        const nextCandlesForSession = seriesForInterval.candles
+        setCandles(nextCandlesForSession)
+        candlesRef.current = nextCandlesForSession
+        applyServerTradingState(session)
+        // Remap onto the tip±2d FE series. Server ActivePack is the same window.
+        const tip = session.simWatermark ?? tipWatermark
+        const localPlayhead = playheadForWatermark(
+          nextCandlesForSession,
+          tip,
+          session.interval,
+        )
+        const inRange =
+          session.playhead >= 0 &&
+          session.playhead <= nextCandlesForSession.length
+        const syncedPlayhead = inRange ? session.playhead : localPlayhead
+        setPlayhead(syncedPlayhead)
+        playheadRef.current = syncedPlayhead
+        serverPlayheadRef.current = syncedPlayhead
+        pendingToPlayheadRef.current = null
+        setPlaying(false)
+        setLoadWarning(
+          goingHigher
+            ? `Switched to higher TF ${session.interval}. Paused until Play (tip ${tip}).`
+            : `Switched to ${session.interval} at tip ${tip}. Orders kept. Paused until Play.`,
+        )
+        return
+      }
+
       const switched = applyIntervalSeries(
         nextInterval,
-        result.candles,
-        currentTime,
+        nextCandles,
+        tipWatermark,
       )
-      if (switched && result.incomplete) {
-        setLoadWarning(
-          (prev) =>
-            `${prev ?? `Switched to ${nextInterval}.`} Warning: ${result.message ?? 'series incomplete.'}`,
-        )
+      if (switched && !goingHigher && wasPlaying) {
+        setPlaying(true)
       }
     } catch (err) {
       if (isAbortError(err)) {
@@ -1017,11 +1391,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           ? err.message
           : err instanceof Error
             ? err.message
-            : 'Failed to load candles'
+            : 'Failed to switch interval'
       setLoadWarning(
         formatIntervalSwitchBlock({
           interval: nextInterval,
-          currentTime,
+          currentTime: watermark,
           reason: 'load-failed',
           detail: message,
         }),
@@ -1029,10 +1403,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       if (intervalSwitchAbortRef.current === controller) {
         setLoading(false)
-      }
-      if (wasPlaying) {
-        // Leave paused after switch so the learner can verify the new TF.
-        setPlaying(false)
       }
     }
   }
@@ -1063,47 +1433,129 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     setError(null)
     setLoadWarning(null)
-
-    const range = candleRangeFromDates({
-      startDate: rangeStartDate,
-      endDate: rangeEndDate,
-      interval,
-    })
-    if (!range.ok) {
-      setError(range.message)
-      setLoading(false)
-      return
-    }
+    setSimWatermark(null)
+    setSimMark(null)
 
     try {
-      const result = await fetchCandles({
-        symbol: symbol.trim().toUpperCase(),
-        interval,
-        startTime: range.startTime,
-        endTime: range.endTime,
-        refresh,
-        signal: controller.signal,
-      })
+      const selected = interval
+      const cache: Record<string, PackSeriesState> = {}
+      const playable: string[] = []
+      const notes: string[] = []
 
-      if (result.candles.length === 0) {
-        setError('No candles returned for the selected range.')
+      // Ensure full range on server; FE only takes the first pack page (~500).
+      await Promise.all(
+        CHART_INTERVALS.map(async (tf) => {
+          const range = candleRangeFromDates({
+            startDate: rangeStartDate,
+            endDate: rangeEndDate,
+            interval: tf,
+          })
+          if (!range.ok) {
+            notes.push(`${tf}: ${range.message}`)
+            return
+          }
+          try {
+            const pack = await loadFirstPack({
+              symbol: symbol.trim().toUpperCase(),
+              interval: tf,
+              startTime: range.startTime,
+              endTime: range.endTime,
+              refresh,
+              signal: controller.signal,
+            })
+            if (pack.candles.length > 0) {
+              cache[tf] = {
+                candles: pack.candles,
+                nextOffset: pack.nextOffset,
+                totalCount: pack.totalCount,
+                hasMore: pack.hasMore,
+                startTime: pack.startTime,
+                endTime: pack.endTime,
+              }
+              playable.push(tf)
+              if (pack.incomplete) {
+                notes.push(
+                  `${tf}: incomplete${pack.message ? ` (${pack.message})` : ''}`,
+                )
+              }
+            } else {
+              notes.push(`${tf}: no candles`)
+            }
+          } catch (err) {
+            if (isAbortError(err)) {
+              throw err
+            }
+            const message =
+              err instanceof ApiError
+                ? err.message
+                : err instanceof Error
+                  ? err.message
+                  : 'load failed'
+            notes.push(`${tf}: ${message}`)
+          }
+        }),
+      )
+
+      if (controller.signal.aborted) {
         return
       }
 
-      const defaultStart = toDateInputValue(result.candles[0]!.timestamp)
-      resetSessionFromCandles(result.candles, defaultStart)
-      setLoadRange({
-        startTime: range.startTime,
-        endTime: range.endTime,
+      const primaryPack =
+        cache[selected] ??
+        (playable[0] != null ? cache[playable[0]] : undefined)
+      const activeInterval =
+        cache[selected] != null
+          ? selected
+          : (playable[0] ?? selected)
+
+      if (!primaryPack || primaryPack.candles.length === 0) {
+        setError(
+          notes.length > 0
+            ? `No playable intervals. ${notes.join('; ')}`
+            : 'No candles returned for the selected range.',
+        )
+        setSeriesCache({})
+        setPlayableIntervals([])
+        return
+      }
+
+      const primaryRange = candleRangeFromDates({
+        startDate: rangeStartDate,
+        endDate: rangeEndDate,
+        interval: activeInterval,
       })
-      setSeriesCache({ [interval]: result.candles })
+      if (!primaryRange.ok) {
+        setError(primaryRange.message)
+        return
+      }
+
+      const defaultStart = toDateInputValue(primaryPack.candles[0]!.timestamp)
+      resetSessionFromCandles(primaryPack.candles, defaultStart)
+      setInterval(activeInterval)
+      setLoadRange({
+        startTime: primaryRange.startTime,
+        endTime: primaryRange.endTime,
+      })
+      setSeriesCache(cache)
+      setPlayableIntervals(
+        CHART_INTERVALS.filter((tf) => playable.includes(tf)),
+      )
+
+      const playableLabel = playable.join(', ')
+      const unavailable = CHART_INTERVALS.filter((tf) => !playable.includes(tf))
+      const unavailableLabel =
+        unavailable.length > 0 ? ` Not available: ${unavailable.join(', ')}.` : ''
+      const detail = notes.length > 0 ? ` ${notes.join('; ')}.` : ''
       setLoadWarning(
-        formatCandleLoadStatus({
-          source: result.source,
-          incomplete: result.incomplete,
-          message: result.message,
-          candleCount: result.candles.length,
-        }),
+        `Playable: ${playableLabel}.${unavailableLabel}` +
+          formatCandleLoadStatus({
+            source: 'local',
+            incomplete: notes.some((n) => n.includes('incomplete')),
+            message: detail.trim() || null,
+            candleCount: primaryPack.candles.length,
+            totalCount: primaryPack.totalCount,
+            hasMore: primaryPack.hasMore,
+          }).replace(/^Loaded/, ' Active series'),
       )
     } catch (err) {
       if (isAbortError(err)) {
@@ -1115,7 +1567,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           : err instanceof Error
             ? err.message
             : 'Failed to load candles'
-      // Hard failure: keep any previously loaded good series.
       setError(message)
     } finally {
       if (loadAbortRef.current === controller) {
@@ -1145,6 +1596,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSymbol,
     interval,
     changeInterval,
+    playableIntervals,
+    simWatermark,
     candles,
     sessionStartDate,
     playhead,
@@ -1169,6 +1622,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     pendingOrders,
     closedTrades,
     realizedPnl,
+    coachVerdict,
+    coachAnalysis,
+    coachFindings,
+    coachAnalyzedAt,
+    rememberCoachResult,
     sessionStartIndex,
     visibleCandles,
     atEnd,

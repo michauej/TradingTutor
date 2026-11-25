@@ -6,5 +6,9 @@ public class CandleStorageOptions
 
     public string RootPath { get; set; } = "data/candles";
 
-    public int MaxBarsPerLoad { get; set; } = 10_000;
+    /// <summary>
+    /// Bars per progressive FE pack page (chart loader). Not a hard range clamp —
+    /// the server stores the full requested range in the pack file.
+    /// </summary>
+    public int PackPageSize { get; set; } = 500;
 }

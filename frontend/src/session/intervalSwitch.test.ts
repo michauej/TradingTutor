@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   classifyCoverageGap,
   formatIntervalSwitchBlock,
+  isHigherTimeframe,
   playheadForTimestamp,
+  playheadForWatermark,
   playheadTimestamp,
   seriesCoversTimestamp,
 } from './intervalSwitch'
@@ -42,6 +44,27 @@ describe('playheadForTimestamp', () => {
 
   it('maps a time between bars to the next bar index', () => {
     expect(playheadForTimestamp(series, '2024-11-01T01:30:00.000Z')).toBe(2)
+  })
+})
+
+describe('playheadForWatermark', () => {
+  it('reveals the bar when watermark equals its open', () => {
+    expect(
+      playheadForWatermark(series, '2024-11-01T01:00:00.000Z', '1h'),
+    ).toBe(2)
+  })
+
+  it('includes the in-progress bar when watermark falls inside it', () => {
+    expect(
+      playheadForWatermark(series, '2024-11-01T01:30:00.000Z', '1h'),
+    ).toBe(2)
+  })
+})
+
+describe('isHigherTimeframe', () => {
+  it('detects HTF vs LTF', () => {
+    expect(isHigherTimeframe('15m', '1h')).toBe(true)
+    expect(isHigherTimeframe('1h', '15m')).toBe(false)
   })
 })
 

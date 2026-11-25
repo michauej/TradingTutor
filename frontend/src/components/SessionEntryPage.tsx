@@ -1,13 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { earliestFromDateForInterval, useSession } from '../session'
+import {
+  CHART_INTERVALS,
+  earliestFromDateForInterval,
+  useSession,
+} from '../session'
 import {
   ApiError,
   listSessions,
   type TradingSessionSummaryDto,
 } from '../services/api'
-
-const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
 
 function formatWhen(iso: string): string {
   const ms = Date.parse(iso)
@@ -24,6 +26,7 @@ export default function SessionEntryPage() {
     setSymbol,
     interval,
     changeInterval,
+    playableIntervals,
     sessionStartDate,
     error,
     loadWarning,
@@ -77,9 +80,9 @@ export default function SessionEntryPage() {
     void refreshSessionList()
   }, [])
 
-  function handleStart() {
+  async function handleStart() {
     setActionMessage(null)
-    const started = startSession()
+    const started = await startSession()
     if (!started.ok) {
       setActionMessage(started.message)
       return
@@ -136,11 +139,16 @@ export default function SessionEntryPage() {
               disabled={loading}
               aria-label="Chart interval"
             >
-              {INTERVALS.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
+              {CHART_INTERVALS.map((value) => {
+                const playable =
+                  playableIntervals.length === 0 ||
+                  playableIntervals.includes(value)
+                return (
+                  <option key={value} value={value} disabled={!playable}>
+                    {playable ? value : `${value} (n/a)`}
+                  </option>
+                )
+              })}
             </select>
           </label>
 
@@ -203,9 +211,11 @@ export default function SessionEntryPage() {
             />
           </label>
           <p className="load-form-hint">
-            From/To set how much history to download. Earliest From sets From to
-            the oldest date that still fits the ~10 000-bar load cap for the
-            selected interval. Session start sets where playback begins.
+            From/To set how much history to store in the server pack. The chart
+            loads ~500-bar pages. On TF switch it loads a tip window (at least 2
+            days or ~500 bars each side), then fetches more as play nears the
+            end. Earliest From is a soft date hint only. Session start sets where
+            playback begins.
           </p>
 
           <label>

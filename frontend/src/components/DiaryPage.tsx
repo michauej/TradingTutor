@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getAnalyzeGate, mapClosedTradesForCoach } from '../coach'
+import { getAnalyzeGate } from '../coach'
 import {
   BUY_MARKER_COLOR,
   SELL_MARKER_COLOR,
@@ -152,12 +152,17 @@ export default function DiaryPage() {
   const {
     sessionLocked,
     isReviewMode,
+    activeSessionId,
     visibleCandles,
     closedTrades,
     lots,
     handlePause,
     playing,
     error,
+    coachVerdict,
+    coachAnalysis,
+    coachFindings,
+    rememberCoachResult,
   } = useSession()
 
   const diaryAvailable = sessionLocked || isReviewMode
@@ -180,6 +185,21 @@ export default function DiaryPage() {
       coachAbortRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (!coachVerdict) {
+      return
+    }
+    setCoachState({
+      status: 'success',
+      result: {
+        verdict: coachVerdict,
+        analysis: coachAnalysis ?? '',
+        findings: coachFindings,
+        tradeCount: closedTrades.length,
+      },
+    })
+  }, [coachVerdict, coachAnalysis, coachFindings, closedTrades.length])
 
   const filteredClosed = useMemo(
     () => filterClosedTrades(closedTrades, filters),
@@ -213,6 +233,13 @@ export default function DiaryPage() {
     if (!canAnalyze) {
       return
     }
+    if (!activeSessionId) {
+      setCoachState({
+        status: 'error',
+        message: 'No active server session to analyze.',
+      })
+      return
+    }
 
     coachAbortRef.current?.abort()
     const controller = new AbortController()
@@ -221,9 +248,10 @@ export default function DiaryPage() {
 
     try {
       const result = await fetchCoachAnalyze({
-        closedTrades: mapClosedTradesForCoach(closedTrades),
+        sessionId: activeSessionId,
         signal: controller.signal,
       })
+      rememberCoachResult(result)
       setCoachState({ status: 'success', result })
     } catch (err) {
       if (controller.signal.aborted) {

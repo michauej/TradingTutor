@@ -93,7 +93,7 @@ public class CandleLoadServiceTests
         exchange.EnqueuePage(olderPage);
 
         var repo = new InMemoryPackRepository();
-        var service = CreateService(exchange, repo, maxBars: 10_000);
+        var service = CreateService(exchange, repo);
 
         var result = await service.LoadAsync("BTCUSDT", "1h", start, end, refresh: false);
 
@@ -105,30 +105,37 @@ public class CandleLoadServiceTests
     }
 
     [Fact]
-    public async Task LoadAsync_SafetyMax_StopsAndMarksIncomplete()
+    public async Task LoadAsync_WithOffsetLimit_ReturnsPackPage()
     {
         var start = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end = new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc);
+        var end = new DateTime(2024, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+        // Hours 0..10 inclusive so CoversRange(max >= end) holds for end=10:00.
+        var pack = Pack(
+            candles: Enumerable.Range(0, 11)
+                .Select(i => Candle(start.AddHours(i), 100m + i))
+                .ToList(),
+            incomplete: false);
 
-        // MaxBarsPerLoad=5 clamps the window, then a full page of 5 hits the safety stop.
         var exchange = new ScriptedExchange();
-        var page = Enumerable.Range(0, 5)
-            .Select(i => Candle(end.AddHours(-(4 - i)), 100m + i))
-            .ToList();
-        exchange.EnqueuePage(page);
-        exchange.EnqueuePage(
-            Enumerable.Range(0, 5)
-                .Select(i => Candle(end.AddHours(-(9 - i)), 90m + i))
-                .ToList());
+        var repo = new InMemoryPackRepository(pack);
+        var service = CreateService(exchange, repo);
 
-        var repo = new InMemoryPackRepository();
-        var service = CreateService(exchange, repo, maxBars: 5);
+        var result = await service.LoadAsync(
+            "BTCUSDT",
+            "1h",
+            start,
+            end,
+            refresh: false,
+            offset: 3,
+            limit: 4);
 
-        var result = await service.LoadAsync("BTCUSDT", "1h", start, end, refresh: false);
-
-        Assert.True(result.Candles.Count <= 5);
-        Assert.NotNull(repo.LastSaved);
-        Assert.True(result.Incomplete || result.Candles.Count == 5);
+        Assert.Equal("local", result.Source);
+        Assert.Equal(3, result.Offset);
+        Assert.Equal(11, result.TotalCount);
+        Assert.Equal(4, result.Candles.Count);
+        Assert.True(result.HasMore);
+        Assert.Equal(start.AddHours(3), result.Candles[0].Timestamp);
+        Assert.Equal(0, exchange.CallCount);
     }
 
     [Fact]
@@ -185,14 +192,14 @@ public class CandleLoadServiceTests
     private static CandleLoadService CreateService(
         IExchangeService exchange,
         ICandlePackRepository repository,
-        int maxBars = 10_000) =>
+        int packPageSize = 500) =>
         new(
             exchange,
             repository,
             Options.Create(new CandleStorageOptions
             {
                 RootPath = "unused",
-                MaxBarsPerLoad = maxBars
+                PackPageSize = packPageSize
             }),
             NullLogger<CandleLoadService>.Instance);
 

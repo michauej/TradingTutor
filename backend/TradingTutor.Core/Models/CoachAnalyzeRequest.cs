@@ -1,6 +1,7 @@
 namespace TradingTutor.Core.Models;
 
+/// <summary>Analyze closed trades from a persisted session (single supported path).</summary>
 public class CoachAnalyzeRequest
 {
-    public List<ClosedTradeInput> ClosedTrades { get; set; } = [];
+    public string SessionId { get; set; } = string.Empty;
 }

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace TradingTutor.Tests;
 
-public class FixedRulePackTests
+public class RulePackTests
 {
     private static ClosedTradeInput Trade(
         string id,
@@ -33,7 +33,7 @@ public class FixedRulePackTests
     [Fact]
     public void Evaluate_EmptyTrades_ReturnsEmptyFindings()
     {
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         Assert.Empty(pack.Evaluate([]));
     }
 
@@ -46,7 +46,7 @@ public class FixedRulePackTests
             Trade("t1", "long", 100m, 99.5m, -0.5m)
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         var hit = Assert.Single(findings, f => f.Id == "long-adverse-05");
@@ -63,7 +63,7 @@ public class FixedRulePackTests
             Trade("t1", "long", 100m, 99.6m, -0.4m)
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         Assert.DoesNotContain(findings, f => f.Id == "long-adverse-05");
@@ -77,7 +77,7 @@ public class FixedRulePackTests
             Trade("s1", "short", 100m, 100.5m, -0.5m)
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         var hit = Assert.Single(findings, f => f.Id == "short-adverse-05");
@@ -96,7 +96,7 @@ public class FixedRulePackTests
             Trade("d", "long", 100m, 99m, -1m, t0.AddMinutes(6), t0.AddMinutes(7)),
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         var hit = Assert.Single(findings, f => f.Id == "loss-cluster-3");
@@ -113,7 +113,7 @@ public class FixedRulePackTests
             Trade("fast", "long", 100m, 101m, 1m, open, open.AddSeconds(30))
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         Assert.Contains(findings, f => f.Id == "short-hold-60s");
@@ -131,7 +131,7 @@ public class FixedRulePackTests
             Trade("5", "long", 100m, 99m, -1m),
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var findings = pack.Evaluate(trades);
 
         var hit = Assert.Single(findings, f => f.Id == "low-win-rate-40");
@@ -151,7 +151,7 @@ public class FixedRulePackTests
             Trade("l4", "long", 100m, 99m, -1m, open.AddMinutes(4), open.AddMinutes(4).AddSeconds(10)),
         };
 
-        var pack = new FixedRulePack();
+        var pack = RulePack.CreateFixed();
         var first = pack.Evaluate(trades).Select(f => f.Id).ToList();
         var second = pack.Evaluate(trades).Select(f => f.Id).ToList();
 

@@ -5,8 +5,8 @@ import {
   defaultCandleRange,
   defaultRangeDates,
   earliestFromDateForInterval,
+  EARLIEST_FROM_HINT_BARS,
   formatCandleLoadStatus,
-  MAX_BARS_PER_LOAD,
 } from './candleLoadRange'
 
 describe('defaultCandleRange', () => {
@@ -29,7 +29,7 @@ describe('defaultRangeDates', () => {
 })
 
 describe('earliestFromDateForInterval', () => {
-  it('sets From so ~MaxBars 1d candles fit before To', () => {
+  it('sets From so ~hintBars 1d candles fit before To', () => {
     const from = earliestFromDateForInterval({
       endDate: '2024-11-08',
       interval: '1d',
@@ -38,18 +38,17 @@ describe('earliestFromDateForInterval', () => {
     expect(from).toBe('2024-08-01')
   })
 
-  it('uses MaxBarsPerLoad by default for 1h', () => {
+  it('uses EARLIEST_FROM_HINT_BARS by default for 1h', () => {
     const from = earliestFromDateForInterval({
       endDate: '2024-11-08',
       interval: '1h',
     })
     expect(from).not.toBeNull()
-    // ~10000 hours ≈ 416 days before end-of-day 2024-11-08
     expect(from).toBe(
       earliestFromDateForInterval({
         endDate: '2024-11-08',
         interval: '1h',
-        maxBars: MAX_BARS_PER_LOAD,
+        maxBars: EARLIEST_FROM_HINT_BARS,
       }),
     )
   })
@@ -101,14 +100,15 @@ describe('formatCandleLoadStatus', () => {
     ).toBe('Loaded 42 candles from local pack.')
   })
 
-  it('surfaces incomplete warning from message', () => {
+  it('mentions progressive pack pages', () => {
     expect(
       formatCandleLoadStatus({
-        source: 'partial',
-        incomplete: true,
-        message: 'Stopped at MaxBarsPerLoad (10000).',
-        candleCount: 10000,
+        source: 'local',
+        incomplete: false,
+        candleCount: 500,
+        totalCount: 12000,
+        hasMore: true,
       }),
-    ).toContain('Warning: Stopped at MaxBarsPerLoad (10000).')
+    ).toContain('500 of 12000')
   })
 })

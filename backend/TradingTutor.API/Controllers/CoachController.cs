@@ -23,18 +23,27 @@ public class CoachController : ControllerBase
         [FromBody] CoachAnalyzeRequest? request,
         CancellationToken cancellationToken = default)
     {
-        if (request?.ClosedTrades is null)
+        if (request is null || string.IsNullOrWhiteSpace(request.SessionId))
         {
             return Problem(
-                detail: "Request body must include a closedTrades array.",
+                detail: "Request body must include a sessionId.",
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Invalid request");
         }
 
         try
         {
-            var result = await _analyzeService.AnalyzeAsync(request.ClosedTrades, cancellationToken);
+            var result = await _analyzeService.AnalyzeBySessionAsync(
+                request.SessionId,
+                cancellationToken);
             return Ok(result);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Session not found");
         }
         catch (ArgumentException ex)
         {
@@ -49,8 +58,8 @@ public class CoachController : ControllerBase
         }
         catch (LmStudioException ex)
         {
-            _logger.LogWarning(ex, "Coach analyze upstream LM failure for {TradeCount} trades",
-                request.ClosedTrades.Count);
+            _logger.LogWarning(ex, "Coach analyze upstream LM failure for session {SessionId}",
+                request.SessionId);
             return Problem(
                 detail: "Failed to get coaching analysis from LM Studio.",
                 statusCode: StatusCodes.Status502BadGateway,

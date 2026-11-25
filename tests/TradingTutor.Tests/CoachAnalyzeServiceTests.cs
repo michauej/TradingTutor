@@ -4,6 +4,7 @@ using TradingTutor.Coaching;
 using TradingTutor.Coaching.Llm;
 using TradingTutor.Coaching.Rules;
 using TradingTutor.Core.Models;
+using TradingTutor.Trading.Interfaces;
 using Xunit;
 
 namespace TradingTutor.Tests;
@@ -31,31 +32,34 @@ public class CoachAnalyzeServiceTests
         Trade("5")
     ];
 
-    private static CoachAnalyzeService CreateService(ILmStudioClient lm) =>
+    private static CoachAnalyzeService CreateService(
+        ILmStudioClient lm,
+        ISessionRepository? sessions = null) =>
         new(
-            new FixedRulePack(),
+            RulePack.CreateFixed(),
             lm,
             new LectureContextLoader(
                 Options.Create(new CoachOptions { PdfFolder = "" }),
                 NullLogger<LectureContextLoader>.Instance),
+            sessions ?? new FakeSessionStore(),
             NullLogger<CoachAnalyzeService>.Instance);
 
     [Fact]
-    public async Task AnalyzeAsync_UnderFiveTrades_ThrowsArgumentException()
+    public async Task AnalyzeTradesAsync_UnderFiveTrades_ThrowsArgumentException()
     {
         var service = CreateService(new FakeLmClient("VERDICT: ok\nANALYSIS: fine"));
         var ex = await Assert.ThrowsAsync<ArgumentException>(
-            () => service.AnalyzeAsync([Trade("1"), Trade("2")]));
+            () => service.AnalyzeTradesAsync([Trade("1"), Trade("2")]));
         Assert.Contains("At least 5", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task AnalyzeAsync_LmSuccess_ReturnsFindingsWithVerdict()
+    public async Task AnalyzeTradesAsync_LmSuccess_ReturnsFindingsWithVerdict()
     {
         var lm = new FakeLmClient("VERDICT: Solid session\nANALYSIS: Keep sizing consistent.");
         var service = CreateService(lm);
 
-        var result = await service.AnalyzeAsync(FiveTrades());
+        var result = await service.AnalyzeTradesAsync(FiveTrades());
 
         Assert.Equal(5, result.TradeCount);
         Assert.Equal("Solid session", result.Verdict);
@@ -66,26 +70,82 @@ public class CoachAnalyzeServiceTests
     }
 
     [Fact]
-    public async Task AnalyzeAsync_LmFailure_PropagatesWithoutReturningFindings()
+    public async Task AnalyzeTradesAsync_LmFailure_PropagatesWithoutReturningFindings()
     {
         var lm = new FakeLmClient(null, new LmStudioException("down"));
         var service = CreateService(lm);
 
         var ex = await Assert.ThrowsAsync<LmStudioException>(
-            () => service.AnalyzeAsync(FiveTrades()));
+            () => service.AnalyzeTradesAsync(FiveTrades()));
         Assert.Equal("down", ex.Message);
     }
 
     [Fact]
-    public async Task AnalyzeAsync_InvalidSide_ThrowsBeforeLmCall()
+    public async Task AnalyzeTradesAsync_InvalidSide_ThrowsBeforeLmCall()
     {
         var lm = new FakeLmClient("VERDICT: x\nANALYSIS: y");
         var service = CreateService(lm);
         var trades = FiveTrades();
         trades[0].Side = "flat";
 
-        await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeAsync(trades));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeTradesAsync(trades));
         Assert.Equal(0, lm.CallCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeBySessionAsync_LoadsTradesPersistsCoachFields()
+    {
+        var store = new FakeSessionStore();
+        store.Sessions["s1"] = new TradingSession
+        {
+            Id = "s1",
+            Symbol = "BTCUSDT",
+            ClosedTrades = FiveTrades()
+        };
+        var lm = new FakeLmClient("VERDICT: Good\nANALYSIS: Stay patient.");
+        var service = CreateService(lm, store);
+
+        var result = await service.AnalyzeBySessionAsync("s1");
+
+        Assert.Equal("Good", result.Verdict);
+        var saved = store.Sessions["s1"];
+        Assert.Equal("Good", saved.CoachVerdict);
+        Assert.Equal("Stay patient.", saved.CoachAnalysis);
+        Assert.NotNull(saved.CoachAnalyzedAt);
+        Assert.Equal(result.Findings.Count, saved.CoachFindings.Count);
+    }
+
+    [Fact]
+    public async Task AnalyzeBySessionAsync_MissingSession_Throws()
+    {
+        var service = CreateService(new FakeLmClient("VERDICT: x\nANALYSIS: y"));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            service.AnalyzeBySessionAsync("missing"));
+    }
+
+    private sealed class FakeSessionStore : ISessionRepository
+    {
+        public Dictionary<string, TradingSession> Sessions { get; } = new(StringComparer.Ordinal);
+
+        public Task CreateSessionAsync(
+            TradingSession session,
+            CancellationToken cancellationToken = default)
+        {
+            Sessions[session.Id] = session;
+            return Task.CompletedTask;
+        }
+
+        public Task<TradingSession?> GetSessionAsync(
+            string id,
+            CancellationToken cancellationToken = default)
+        {
+            Sessions.TryGetValue(id, out var session);
+            return Task.FromResult(session);
+        }
+
+        public Task<IReadOnlyList<TradingSessionSummary>> ListSessionsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TradingSessionSummary>>([]);
     }
 
     private sealed class FakeLmClient : ILmStudioClient

@@ -1,6 +1,6 @@
 import type { UTCTimestamp } from 'lightweight-charts'
 import type { MarketData } from '../services/api'
-import { toUtcTimestamp } from './toUtcTimestamp'
+import { parseUtcMillis, toUtcTimestamp } from './toUtcTimestamp'
 
 const INTERVAL_MS: Record<string, number> = {
   '1m': 60_000,
@@ -16,9 +16,9 @@ const INTERVAL_MS: Record<string, number> = {
 
 function inferBarDurationMs(candles: readonly MarketData[]): number {
   if (candles.length >= 2) {
-    const prev = Date.parse(candles[candles.length - 2]!.timestamp)
-    const last = Date.parse(candles[candles.length - 1]!.timestamp)
-    if (!Number.isNaN(prev) && !Number.isNaN(last) && last > prev) {
+    const prev = parseUtcMillis(candles[candles.length - 2]!.timestamp)
+    const last = parseUtcMillis(candles[candles.length - 1]!.timestamp)
+    if (prev != null && last != null && last > prev) {
       return last - prev
     }
   }
@@ -61,17 +61,17 @@ export function snapToCandleTimestamp(
     return null
   }
 
-  const openMs = Date.parse(candles[snappedIndex]!.timestamp)
-  if (Number.isNaN(openMs)) {
+  const openMs = parseUtcMillis(candles[snappedIndex]!.timestamp)
+  if (openMs === null) {
     return null
   }
 
   const endMs =
     snappedIndex < candles.length - 1
-      ? Date.parse(candles[snappedIndex + 1]!.timestamp)
+      ? parseUtcMillis(candles[snappedIndex + 1]!.timestamp)
       : openMs + inferBarDurationMs(candles)
 
-  if (Number.isNaN(endMs) || targetMs >= endMs) {
+  if (endMs === null || targetMs >= endMs) {
     return null
   }
 

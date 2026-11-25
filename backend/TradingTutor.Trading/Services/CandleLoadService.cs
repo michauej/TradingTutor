@@ -9,6 +9,7 @@ namespace TradingTutor.Trading.Services;
 
 public class CandleLoadService : ICandleLoadService
 {
+    /// <summary>ByBit single-page max — not an app range clamp.</summary>
     public const int PageSize = 1000;
 
     private readonly IExchangeService _exchange;
@@ -34,6 +35,8 @@ public class CandleLoadService : ICandleLoadService
         DateTime start,
         DateTime end,
         bool refresh = false,
+        int? offset = null,
+        int? limit = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -49,18 +52,14 @@ public class CandleLoadService : ICandleLoadService
             throw new CandleLoadValidationException("startTime must be earlier than endTime.");
         }
 
-        var maxBars = Math.Max(1, _options.MaxBarsPerLoad);
-        var estimated = CandleInterval.EstimateBarCount(rangeStart, rangeEnd, normalizedInterval);
-        if (estimated > maxBars)
+        if (offset is < 0)
         {
-            var barDuration = CandleInterval.ToDuration(normalizedInterval);
-            rangeStart = rangeEnd - TimeSpan.FromTicks(barDuration.Ticks * maxBars);
-            _logger.LogInformation(
-                "Clamped candle load range for {Symbol} {Interval} to last {MaxBars} bars (start={Start:o})",
-                normalizedSymbol,
-                normalizedInterval,
-                maxBars,
-                rangeStart);
+            throw new CandleLoadValidationException("offset must be >= 0.");
+        }
+
+        if (limit is <= 0)
+        {
+            throw new CandleLoadValidationException("limit must be > 0 when provided.");
         }
 
         var exchangeName = _exchange.ExchangeName;
@@ -73,15 +72,15 @@ public class CandleLoadService : ICandleLoadService
         if (!refresh && existing is not null && CoversRange(existing, rangeStart, rangeEnd))
         {
             var localCandles = FilterRange(existing.Candles, rangeStart, rangeEnd);
-            return new CandleLoadResult
-            {
-                Candles = localCandles,
-                Source = "local",
-                Incomplete = existing.Incomplete,
-                Message = existing.Incomplete
+            return PageResult(
+                localCandles,
+                source: "local",
+                incomplete: existing.Incomplete,
+                message: existing.Incomplete
                     ? "Loaded from local pack marked incomplete."
-                    : null
-            };
+                    : null,
+                offset,
+                limit);
         }
 
         var fetchStart = rangeStart;
@@ -112,14 +111,13 @@ public class CandleLoadService : ICandleLoadService
                 normalizedInterval,
                 fetchStart,
                 fetchEnd,
-                maxBars,
                 cancellationToken);
             downloaded = pageResult.Candles;
             incomplete = pageResult.Incomplete;
             if (incomplete)
             {
                 partialMessage = pageResult.Message ??
-                    "Download stopped early (safety max or exchange returned a short page). Pack saved as incomplete.";
+                    "Download stopped early (exchange returned a short page or error). Pack saved as incomplete.";
             }
         }
         catch (OperationCanceledException)
@@ -131,13 +129,13 @@ public class CandleLoadService : ICandleLoadService
             if (existing is not null && CoversRange(existing, rangeStart, rangeEnd))
             {
                 _logger.LogWarning(ex, "Exchange fetch failed; falling back to covering local pack");
-                return new CandleLoadResult
-                {
-                    Candles = FilterRange(existing.Candles, rangeStart, rangeEnd),
-                    Source = "local",
-                    Incomplete = true,
-                    Message = "Exchange fetch failed; returned covering local pack."
-                };
+                return PageResult(
+                    FilterRange(existing.Candles, rangeStart, rangeEnd),
+                    source: "local",
+                    incomplete: true,
+                    message: "Exchange fetch failed; returned covering local pack.",
+                    offset,
+                    limit);
             }
 
             throw new CandleLoadExchangeException(
@@ -149,13 +147,13 @@ public class CandleLoadService : ICandleLoadService
         {
             if (existing is not null && FilterRange(existing.Candles, rangeStart, rangeEnd).Count > 0)
             {
-                return new CandleLoadResult
-                {
-                    Candles = FilterRange(existing.Candles, rangeStart, rangeEnd),
-                    Source = "local",
-                    Incomplete = existing.Incomplete || incomplete,
-                    Message = "Exchange returned no new candles; using local pack."
-                };
+                return PageResult(
+                    FilterRange(existing.Candles, rangeStart, rangeEnd),
+                    source: "local",
+                    incomplete: existing.Incomplete || incomplete,
+                    message: "Exchange returned no new candles; using local pack.",
+                    offset,
+                    limit);
             }
 
             throw new CandleLoadExchangeException("Exchange returned no candles for the requested range.");
@@ -178,12 +176,52 @@ public class CandleLoadService : ICandleLoadService
         var resultCandles = FilterRange(mergedPack.Candles, rangeStart, rangeEnd);
         var source = incomplete ? "partial" : "exchange";
 
+        return PageResult(
+            resultCandles,
+            source,
+            incomplete,
+            partialMessage,
+            offset,
+            limit);
+    }
+
+    private CandleLoadResult PageResult(
+        IReadOnlyList<MarketData> all,
+        string source,
+        bool incomplete,
+        string? message,
+        int? offset,
+        int? limit)
+    {
+        var total = all.Count;
+        if (offset is null && limit is null)
+        {
+            return new CandleLoadResult
+            {
+                Candles = all,
+                Source = source,
+                Incomplete = incomplete,
+                Message = message,
+                Offset = 0,
+                TotalCount = total,
+                HasMore = false
+            };
+        }
+
+        var start = Math.Clamp(offset ?? 0, 0, total);
+        var defaultPage = Math.Max(1, _options.PackPageSize);
+        var take = Math.Max(1, limit ?? defaultPage);
+        var slice = all.Skip(start).Take(take).ToList();
+
         return new CandleLoadResult
         {
-            Candles = resultCandles,
+            Candles = slice,
             Source = source,
             Incomplete = incomplete,
-            Message = partialMessage
+            Message = message,
+            Offset = start,
+            TotalCount = total,
+            HasMore = start + slice.Count < total
         };
     }
 
@@ -192,7 +230,6 @@ public class CandleLoadService : ICandleLoadService
         string interval,
         DateTime start,
         DateTime end,
-        int maxBars,
         CancellationToken cancellationToken)
     {
         var collected = new List<MarketData>();
@@ -200,12 +237,10 @@ public class CandleLoadService : ICandleLoadService
         var incomplete = false;
         string? message = null;
 
-        while (pageEnd > start && collected.Count < maxBars)
+        // No app-level bar cap — page until the requested start is reached (ByBit page = 1000).
+        while (pageEnd > start)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            var remaining = maxBars - collected.Count;
-            var limit = Math.Min(PageSize, remaining);
 
             IReadOnlyList<MarketData> page;
             try
@@ -215,7 +250,7 @@ public class CandleLoadService : ICandleLoadService
                     interval,
                     startTime: start,
                     endTime: pageEnd,
-                    limit: limit,
+                    limit: PageSize,
                     cancellationToken: cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -239,7 +274,7 @@ public class CandleLoadService : ICandleLoadService
             // Pages arrive oldest-first from ByBitService; paginate backward via oldest timestamp.
             collected.AddRange(page);
 
-            if (page.Count < limit)
+            if (page.Count < PageSize)
             {
                 break;
             }
@@ -260,13 +295,6 @@ public class CandleLoadService : ICandleLoadService
             }
 
             pageEnd = nextEnd;
-
-            if (collected.Count >= maxBars)
-            {
-                incomplete = true;
-                message = $"Stopped at MaxBarsPerLoad ({maxBars}).";
-                break;
-            }
         }
 
         var mergedPage = CandlePackMerger.MergeCandles(null, collected);

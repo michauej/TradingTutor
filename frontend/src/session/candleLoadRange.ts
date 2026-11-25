@@ -1,3 +1,9 @@
+/**
+ * Soft UX hint for the "Earliest From" button only — not a server hard cap.
+ * Server stores the full From–To range; FE loads it in PackPageSize pages.
+ */
+export const EARLIEST_FROM_HINT_BARS = 10_000
+
 const INTERVAL_MS: Record<string, number> = {
   '1m': 60_000,
   '5m': 5 * 60_000,
@@ -7,8 +13,8 @@ const INTERVAL_MS: Record<string, number> = {
   '1d': 24 * 60 * 60_000,
 }
 
-/** Must match backend CandleStorage:MaxBarsPerLoad. */
-export const MAX_BARS_PER_LOAD = 10_000
+/** @deprecated Use EARLIEST_FROM_HINT_BARS — kept for older imports. */
+export const MAX_BARS_PER_LOAD = EARLIEST_FROM_HINT_BARS
 
 /** Align timestamp down to the interval boundary (UTC). */
 export function alignDownToInterval(isoOrDate: Date, interval: string): Date {
@@ -56,8 +62,8 @@ export function defaultRangeDates(params?: {
 }
 
 /**
- * Earliest From calendar day that still fits under MaxBarsPerLoad
- * for the selected interval, ending at `endDate` (or today).
+ * Soft "Earliest From" helper — suggests a From date ~hintBars before To.
+ * Server no longer clamps; this is UX only.
  */
 export function earliestFromDateForInterval(params: {
   endDate: string
@@ -69,8 +75,7 @@ export function earliestFromDateForInterval(params: {
     return null
   }
   const barMs = INTERVAL_MS[params.interval] ?? INTERVAL_MS['1h']!
-  const maxBars = Math.max(1, params.maxBars ?? MAX_BARS_PER_LOAD)
-  // Leave one bar of slack so start < end after alignment.
+  const maxBars = Math.max(1, params.maxBars ?? EARLIEST_FROM_HINT_BARS)
   const spanBars = Math.max(1, maxBars - 1)
   const start = new Date(endRaw.getTime() - spanBars * barMs)
   return toUtcDateInputValue(start)
@@ -132,6 +137,8 @@ export function formatCandleLoadStatus(params: {
   incomplete: boolean
   message?: string | null
   candleCount: number
+  totalCount?: number
+  hasMore?: boolean
 }): string {
   const sourceLabel =
     params.source === 'local'
@@ -139,13 +146,23 @@ export function formatCandleLoadStatus(params: {
       : params.source === 'partial'
         ? 'partial download'
         : 'exchange'
-  const base = `Loaded ${params.candleCount} candles from ${sourceLabel}.`
+  const total =
+    params.totalCount != null && params.totalCount > params.candleCount
+      ? ` (${params.candleCount} of ${params.totalCount} in first pack page)`
+      : ''
+  const base = `Loaded ${params.candleCount} candles${total} from ${sourceLabel}.`
+  const more =
+    params.hasMore === true
+      ? ' More packs load as play nears the end of the page.'
+      : ''
   if (params.incomplete) {
     const detail = params.message?.trim()
-    return detail ? `${base} Warning: ${detail}` : `${base} Warning: series is incomplete.`
+    return detail
+      ? `${base}${more} Warning: ${detail}`
+      : `${base}${more} Warning: series is incomplete.`
   }
   if (params.message?.trim()) {
-    return `${base} ${params.message.trim()}`
+    return `${base}${more} ${params.message.trim()}`
   }
-  return base
+  return `${base}${more}`
 }
