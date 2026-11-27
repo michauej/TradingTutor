@@ -16,6 +16,7 @@ export {
   loadNextPack,
   loadPackAroundWatermark,
   loadPacksThroughWatermark,
+  packMatchesTipWindow,
   tipWindowPadMs,
   tipWindowRange,
   TIP_WINDOW_FUTURE_MS,

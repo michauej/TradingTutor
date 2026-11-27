@@ -4,7 +4,10 @@ import {
   PACK_PAGE_SIZE,
   type MarketData,
 } from '../services/api'
-import { intervalDurationMs } from './intervalSwitch'
+import {
+  intervalDurationMs,
+  seriesCoversWatermark,
+} from './intervalSwitch'
 
 /** Floor pad: at least 2 calendar days each side (keeps 1m switches tight). */
 export const TIP_WINDOW_MIN_DAYS_MS = 2 * 24 * 60 * 60_000
@@ -69,6 +72,51 @@ export function tipWindowRange(params: {
     startTime: new Date(startMs).toISOString(),
     endTime: new Date(endMs).toISOString(),
   }
+}
+
+function sameUtcInstant(a: string, b: string): boolean {
+  const am = parseUtcMillis(a)
+  const bm = parseUtcMillis(b)
+  return am !== null && bm !== null && am === bm
+}
+
+/**
+ * True when the cached FE pack is the tip±pad window for this watermark
+ * (same bounds the server sets on ActivePack during reanchor).
+ * Covering the tip alone is not enough — an older tip window can still
+ * contain a newer tip, but server playhead indexes the *new* window.
+ */
+export function packMatchesTipWindow(params: {
+  pack: PackSeriesState | null | undefined
+  watermarkIso: string
+  rangeStartIso: string
+  rangeEndIso: string
+  interval: string
+}): boolean {
+  const pack = params.pack
+  if (!pack || pack.candles.length === 0) {
+    return false
+  }
+  const window = tipWindowRange({
+    watermarkIso: params.watermarkIso,
+    rangeStartIso: params.rangeStartIso,
+    rangeEndIso: params.rangeEndIso,
+    interval: params.interval,
+  })
+  if (!window.ok) {
+    return false
+  }
+  if (
+    !sameUtcInstant(pack.startTime, window.startTime) ||
+    !sameUtcInstant(pack.endTime, window.endTime)
+  ) {
+    return false
+  }
+  return seriesCoversWatermark(
+    pack.candles,
+    params.watermarkIso,
+    params.interval,
+  )
 }
 
 function withWindow(

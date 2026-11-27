@@ -53,6 +53,7 @@ import {
   loadFirstPack,
   loadNextPack,
   loadPackAroundWatermark,
+  packMatchesTipWindow,
   tipWindowPadMs,
   type PackSeriesState,
 } from './candlePackLoader'
@@ -1273,15 +1274,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         playheadTimestamp(candlesRef.current, playheadRef.current) ??
         watermark
 
-      // Tip±2d window for the new TF — not from pack start (LTF would waste pages).
+      // Tip±pad window for the new TF — must match server ActivePack bounds.
+      // Reusing an older tip window that merely *covers* the tip applies the
+      // server playhead (indexed into the new window) onto the wrong series
+      // (e.g. 5m jumps back ~2 days to the previous tip).
       let packState = seriesCache[nextInterval]
       if (
-        !packState ||
-        !seriesCoversWatermark(
-          packState.candles,
-          tipWatermark,
-          nextInterval,
-        )
+        !packMatchesTipWindow({
+          pack: packState,
+          watermarkIso: tipWatermark,
+          rangeStartIso: loadRange.startTime,
+          rangeEndIso: loadRange.endTime,
+          interval: nextInterval,
+        })
       ) {
         packState = await loadPackAroundWatermark({
           symbol: symbol.trim().toUpperCase(),
@@ -1343,20 +1348,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setCandles(nextCandlesForSession)
         candlesRef.current = nextCandlesForSession
         applyServerTradingState(session)
-        // Remap onto the tip±2d FE series. Server ActivePack is the same window.
+        // Remap onto the tip±pad FE series (same bounds as server ActivePack).
         const tip = session.simWatermark ?? tipWatermark
         const localPlayhead = playheadForWatermark(
           nextCandlesForSession,
           tip,
           session.interval,
         )
-        const inRange =
-          session.playhead >= 0 &&
-          session.playhead <= nextCandlesForSession.length
-        const syncedPlayhead = inRange ? session.playhead : localPlayhead
-        setPlayhead(syncedPlayhead)
-        playheadRef.current = syncedPlayhead
-        serverPlayheadRef.current = syncedPlayhead
+        // FE series is the tip±pad window — remap by watermark, not a raw
+        // server index that may belong to a different cached window.
+        setPlayhead(localPlayhead)
+        playheadRef.current = localPlayhead
+        serverPlayheadRef.current = localPlayhead
         pendingToPlayheadRef.current = null
         setPlaying(false)
         setLoadWarning(

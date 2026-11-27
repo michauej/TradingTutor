@@ -5,12 +5,14 @@ import {
   loadFirstPack,
   loadNextPack,
   loadPackAroundWatermark,
+  packMatchesTipWindow,
   tipWindowPadMs,
   tipWindowRange,
   TIP_WINDOW_MIN_BARS,
   TIP_WINDOW_MIN_DAYS_MS,
+  type PackSeriesState,
 } from './candlePackLoader'
-import { intervalDurationMs } from './intervalSwitch'
+import { intervalDurationMs, seriesCoversWatermark } from './intervalSwitch'
 
 vi.mock('../services/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/api')>()
@@ -95,6 +97,88 @@ describe('tipWindowRange', () => {
       return
     }
     expect(window.startTime).toBe('2024-08-25T00:00:00.000Z')
+  })
+})
+
+describe('packMatchesTipWindow', () => {
+  const rangeStart = '2026-08-29T00:00:00.000Z'
+  const rangeEnd = '2026-11-27T23:00:00.000Z'
+  const tip = '2026-09-11T11:45:00.000Z'
+
+  function packFor(
+    startTime: string,
+    endTime: string,
+    candles: MarketData[],
+  ): PackSeriesState {
+    return {
+      candles,
+      nextOffset: candles.length,
+      totalCount: candles.length,
+      hasMore: false,
+      startTime,
+      endTime,
+    }
+  }
+
+  it('accepts a pack whose bounds match the current tip±pad window', () => {
+    const window = tipWindowRange({
+      watermarkIso: tip,
+      rangeStartIso: rangeStart,
+      rangeEndIso: rangeEnd,
+      interval: '5m',
+    })
+    expect(window.ok).toBe(true)
+    if (!window.ok) {
+      return
+    }
+    const pack = packFor(window.startTime, window.endTime, [
+      bar(window.startTime),
+      bar(tip),
+      bar(window.endTime),
+    ])
+    expect(
+      packMatchesTipWindow({
+        pack,
+        watermarkIso: tip,
+        rangeStartIso: rangeStart,
+        rangeEndIso: rangeEnd,
+        interval: '5m',
+      }),
+    ).toBe(true)
+  })
+
+  it('rejects an older tip window that still covers a newer tip', () => {
+    // Previous tip ~2 days earlier: window still contains Sep 11 11:45,
+    // but server playhead indexes the *new* window — reuse would jump back.
+    const oldTip = '2026-09-10T19:55:00.000Z'
+    const oldWindow = tipWindowRange({
+      watermarkIso: oldTip,
+      rangeStartIso: rangeStart,
+      rangeEndIso: rangeEnd,
+      interval: '5m',
+    })
+    expect(oldWindow.ok).toBe(true)
+    if (!oldWindow.ok) {
+      return
+    }
+    const pack = packFor(oldWindow.startTime, oldWindow.endTime, [
+      bar(oldWindow.startTime),
+      bar(oldTip),
+      bar(tip),
+      bar(oldWindow.endTime),
+    ])
+    expect(
+      seriesCoversWatermark(pack.candles, tip, '5m'),
+    ).toBe(true)
+    expect(
+      packMatchesTipWindow({
+        pack,
+        watermarkIso: tip,
+        rangeStartIso: rangeStart,
+        rangeEndIso: rangeEnd,
+        interval: '5m',
+      }),
+    ).toBe(false)
   })
 })
 
