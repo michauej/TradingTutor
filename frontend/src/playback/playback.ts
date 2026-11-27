@@ -102,17 +102,6 @@ export function advancePlayheadBy(
   return { kind: 'advanced', playhead: next }
 }
 
-/** How many bars to batch into one advance request for a playback speed. */
-export function barsPerTickForSpeed(speed: PlaybackSpeed): number {
-  if (speed >= 5) {
-    return 5
-  }
-  if (speed >= 2) {
-    return 2
-  }
-  return 1
-}
-
 export function isAtEnd(playhead: number, length: number): boolean {
   return length <= 0 || playhead >= length
 }

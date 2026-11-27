@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\backend\TradingTutor.Coaching\TradingTutor.Coaching.csproj" />
     <ProjectReference Include="..\..\backend\TradingTutor.Core\TradingTutor.Core.csproj" />
     <ProjectReference Include="..\..\backend\TradingTutor.Trading\TradingTutor.Trading.csproj" />
+    <ProjectReference Include="..\..\backend\TradingTutor.API\TradingTutor.API.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingTutor.Core.Models;
+using TradingTutor.Core.Observability;
 using TradingTutor.Trading.Interfaces;
 using TradingTutor.Trading.Services;
 
@@ -11,16 +12,13 @@ public class DataController : ControllerBase
 {
     private readonly IExchangeService _exchangeService;
     private readonly ICandleLoadService _candleLoadService;
-    private readonly ILogger<DataController> _logger;
 
     public DataController(
         IExchangeService exchangeService,
-        ICandleLoadService candleLoadService,
-        ILogger<DataController> logger)
+        ICandleLoadService candleLoadService)
     {
         _exchangeService = exchangeService;
         _candleLoadService = candleLoadService;
-        _logger = logger;
     }
 
     /// <summary>
@@ -46,63 +44,30 @@ public class DataController : ControllerBase
                 title: "Invalid request");
         }
 
-        try
-        {
-            var result = await _candleLoadService.LoadAsync(
-                symbol,
-                interval,
-                startTime.Value,
-                endTime.Value,
-                refresh,
-                offset,
-                limit,
-                cancellationToken);
+        using var activity = TradingTutorActivitySources.Source.StartActivity("candle.load");
+        activity?.SetTag("symbol", symbol);
+        activity?.SetTag("interval", interval);
 
-            return Ok(new CandleLoadResponse
-            {
-                Candles = result.Candles,
-                Source = result.Source,
-                Incomplete = result.Incomplete,
-                Message = result.Message,
-                Offset = result.Offset,
-                TotalCount = result.TotalCount,
-                HasMore = result.HasMore
-            });
-        }
-        catch (CandleLoadValidationException ex)
+        var result = await _candleLoadService.LoadAsync(
+            symbol,
+            interval,
+            startTime.Value,
+            endTime.Value,
+            refresh,
+            offset,
+            limit,
+            cancellationToken);
+
+        return Ok(new CandleLoadResponse
         {
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest,
-                title: "Invalid request");
-        }
-        catch (ArgumentException ex)
-        {
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest,
-                title: "Invalid request");
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (CandleLoadExchangeException ex)
-        {
-            _logger.LogError(ex, "Candle load exchange failure for {Symbol} {Interval}", symbol, interval);
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status502BadGateway,
-                title: "Failed to load candles");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected candle load failure for {Symbol} {Interval}", symbol, interval);
-            return Problem(
-                detail: "Failed to load candles.",
-                statusCode: StatusCodes.Status502BadGateway,
-                title: "Failed to load candles");
-        }
+            Candles = result.Candles,
+            Source = result.Source,
+            Incomplete = result.Incomplete,
+            Message = result.Message,
+            Offset = result.Offset,
+            TotalCount = result.TotalCount,
+            HasMore = result.HasMore
+        });
     }
 
     /// <summary>Debug/single-page ByBit passthrough (≤1000 bars). Prefer GET /api/data/candles for Load.</summary>
@@ -115,37 +80,15 @@ public class DataController : ControllerBase
         [FromQuery] int limit = 200,
         CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var candles = await _exchangeService.GetMarketDataAsync(
-                symbol,
-                interval,
-                startTime,
-                endTime,
-                limit,
-                cancellationToken);
+        var candles = await _exchangeService.GetMarketDataAsync(
+            symbol,
+            interval,
+            startTime,
+            endTime,
+            limit,
+            cancellationToken);
 
-            return Ok(candles);
-        }
-        catch (ArgumentException ex)
-        {
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest,
-                title: "Invalid request");
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to fetch ByBit candles for {Symbol} {Interval}", symbol, interval);
-            return Problem(
-                detail: "Failed to fetch market data from ByBit.",
-                statusCode: StatusCodes.Status502BadGateway,
-                title: "Failed to fetch ByBit candles");
-        }
+        return Ok(candles);
     }
 
     public sealed class CandleLoadResponse

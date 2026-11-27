@@ -32,16 +32,13 @@ public class CoachAnalyzeServiceTests
         Trade("5")
     ];
 
-    private static CoachAnalyzeService CreateService(
-        ILmStudioClient lm,
-        ISessionRepository? sessions = null) =>
+    private static CoachAnalyzeService CreateService(ILmStudioClient lm) =>
         new(
             RulePack.CreateFixed(),
-            lm,
             new LectureContextLoader(
                 Options.Create(new CoachOptions { PdfFolder = "" }),
                 NullLogger<LectureContextLoader>.Instance),
-            sessions ?? new FakeSessionStore(),
+            new CoachLlmAnalyzer(lm, NullLogger<CoachLlmAnalyzer>.Instance),
             NullLogger<CoachAnalyzeService>.Instance);
 
     [Fact]
@@ -93,7 +90,7 @@ public class CoachAnalyzeServiceTests
     }
 
     [Fact]
-    public async Task AnalyzeBySessionAsync_LoadsTradesPersistsCoachFields()
+    public async Task ControllerPersist_LoadsTradesPersistsCoachFields()
     {
         var store = new FakeSessionStore();
         store.Sessions["s1"] = new TradingSession
@@ -103,9 +100,18 @@ public class CoachAnalyzeServiceTests
             ClosedTrades = FiveTrades()
         };
         var lm = new FakeLmClient("VERDICT: Good\nANALYSIS: Stay patient.");
-        var service = CreateService(lm, store);
+        var service = CreateService(lm);
 
-        var result = await service.AnalyzeBySessionAsync("s1");
+        var session = await store.GetSessionAsync("s1");
+        Assert.NotNull(session);
+        var result = await service.AnalyzeTradesAsync(session!.ClosedTrades);
+
+        session.CoachVerdict = result.Verdict;
+        session.CoachAnalysis = result.Analysis;
+        session.CoachFindings = result.Findings.ToList();
+        session.CoachAnalyzedAt = DateTime.UtcNow;
+        session.UpdatedAt = DateTime.UtcNow;
+        await store.CreateSessionAsync(session);
 
         Assert.Equal("Good", result.Verdict);
         var saved = store.Sessions["s1"];
@@ -116,11 +122,11 @@ public class CoachAnalyzeServiceTests
     }
 
     [Fact]
-    public async Task AnalyzeBySessionAsync_MissingSession_Throws()
+    public async Task ControllerPersist_MissingSession_IsDetectedBeforeAnalyze()
     {
-        var service = CreateService(new FakeLmClient("VERDICT: x\nANALYSIS: y"));
-        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            service.AnalyzeBySessionAsync("missing"));
+        var store = new FakeSessionStore();
+        var session = await store.GetSessionAsync("missing");
+        Assert.Null(session);
     }
 
     private sealed class FakeSessionStore : ISessionRepository

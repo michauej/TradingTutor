@@ -2,7 +2,6 @@ export {
   WARMUP_CANDLES,
   advancePlayhead,
   advancePlayheadBy,
-  barsPerTickForSpeed,
   delayForSpeed,
   initialPlayhead,
   isAtEnd,

@@ -35,7 +35,7 @@ public class ByBitService : IExchangeService
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(interval);
 
-        var bybitInterval = ConvertInterval(interval);
+        var bybitInterval = IntervalParser.ToByBitInterval(interval);
         var query = new List<string>
         {
             "category=spot",
@@ -111,33 +111,6 @@ public class ByBitService : IExchangeService
         // ByBit returns newest-first; chart consumers expect oldest-first.
         candles.Reverse();
         return candles;
-    }
-
-    internal static string ConvertInterval(string interval)
-    {
-        var key = interval.Trim();
-        // Month must be checked before lowercasing — "1M" would otherwise collide with "1m".
-        if (key is "1M" or "M")
-        {
-            return "M";
-        }
-
-        return key.ToLowerInvariant() switch
-        {
-            "1m" => "1",
-            "3m" => "3",
-            "5m" => "5",
-            "15m" => "15",
-            "30m" => "30",
-            "1h" => "60",
-            "2h" => "120",
-            "4h" => "240",
-            "6h" => "360",
-            "12h" => "720",
-            "1d" or "d" => "D",
-            "1w" or "w" => "W",
-            _ => key
-        };
     }
 
     private static long ParseInt64(JsonElement element) =>

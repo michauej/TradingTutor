@@ -1,7 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingTutor.Coaching;
-using TradingTutor.Coaching.Llm;
 using TradingTutor.Core.Models;
+using TradingTutor.Core.Observability;
+using TradingTutor.Trading.Interfaces;
 
 namespace TradingTutor.API.Controllers;
 
@@ -10,12 +11,14 @@ namespace TradingTutor.API.Controllers;
 public class CoachController : ControllerBase
 {
     private readonly CoachAnalyzeService _analyzeService;
-    private readonly ILogger<CoachController> _logger;
+    private readonly ISessionRepository _sessions;
 
-    public CoachController(CoachAnalyzeService analyzeService, ILogger<CoachController> logger)
+    public CoachController(
+        CoachAnalyzeService analyzeService,
+        ISessionRepository sessions)
     {
         _analyzeService = analyzeService;
-        _logger = logger;
+        _sessions = sessions;
     }
 
     [HttpPost("analyze")]
@@ -31,47 +34,26 @@ public class CoachController : ControllerBase
                 title: "Invalid request");
         }
 
-        try
+        using var activity = TradingTutorActivitySources.Source.StartActivity("coach.analyze");
+        activity?.SetTag("session.id", request.SessionId);
+
+        var session = await _sessions.GetSessionAsync(request.SessionId, cancellationToken);
+        if (session is null)
         {
-            var result = await _analyzeService.AnalyzeBySessionAsync(
-                request.SessionId,
-                cancellationToken);
-            return Ok(result);
+            throw new KeyNotFoundException($"Session '{request.SessionId}' was not found.");
         }
-        catch (KeyNotFoundException ex)
-        {
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status404NotFound,
-                title: "Session not found");
-        }
-        catch (ArgumentException ex)
-        {
-            return Problem(
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest,
-                title: "Invalid request");
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (LmStudioException ex)
-        {
-            _logger.LogWarning(ex, "Coach analyze upstream LM failure for session {SessionId}",
-                request.SessionId);
-            return Problem(
-                detail: "Failed to get coaching analysis from LM Studio.",
-                statusCode: StatusCodes.Status502BadGateway,
-                title: "Coach analysis failed");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Coach analyze failed unexpectedly");
-            return Problem(
-                detail: "Failed to get coaching analysis from LM Studio.",
-                statusCode: StatusCodes.Status502BadGateway,
-                title: "Coach analysis failed");
-        }
+
+        var result = await _analyzeService.AnalyzeTradesAsync(
+            session.ClosedTrades,
+            cancellationToken);
+
+        session.CoachVerdict = result.Verdict;
+        session.CoachAnalysis = result.Analysis;
+        session.CoachFindings = result.Findings.ToList();
+        session.CoachAnalyzedAt = DateTime.UtcNow;
+        session.UpdatedAt = DateTime.UtcNow;
+        await _sessions.CreateSessionAsync(session, cancellationToken);
+
+        return Ok(result);
     }
 }

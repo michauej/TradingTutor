@@ -109,9 +109,15 @@ public class ByBitServiceTests
     [InlineData("4h", "240")]
     [InlineData("1d", "D")]
     [InlineData("1M", "M")]
-    public void ConvertInterval_MapsCommonLabels(string input, string expected)
+    public void ToByBitInterval_MapsCommonLabels(string input, string expected)
     {
-        Assert.Equal(expected, ByBitService.ConvertInterval(input));
+        Assert.Equal(expected, IntervalParser.ToByBitInterval(input));
+    }
+
+    [Fact]
+    public void ToByBitInterval_Unknown_Throws()
+    {
+        Assert.Throws<CandleLoadValidationException>(() => IntervalParser.ToByBitInterval("xyz"));
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

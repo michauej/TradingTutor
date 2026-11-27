@@ -8,8 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  advancePlayheadBy,
-  barsPerTickForSpeed,
+  advancePlayhead,
   delayForSpeed,
   initialPlayhead,
   isAtEnd,
@@ -368,7 +367,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const pumpRunningRef = useRef(false)
   const isReviewModeRef = useRef(isReviewMode)
   const markRef = useRef<{ markPrice: number; markTime: string } | null>(null)
-  const speedRef = useRef(speed)
 
   const sessionStartIndex =
     candles.length === 0
@@ -429,10 +427,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     isReviewModeRef.current = isReviewMode
   }, [isReviewMode])
-
-  useEffect(() => {
-    speedRef.current = speed
-  }, [speed])
 
   useEffect(() => {
     markRef.current = mark
@@ -706,8 +700,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return
       }
       const previous = playheadRef.current
-      const steps = barsPerTickForSpeed(speedRef.current)
-      const result = advancePlayheadBy(previous, length, steps)
+      const result = advancePlayhead(previous, length)
       if (result.playhead <= previous) {
         if (result.kind === 'atEnd') {
           setPlaying(false)
